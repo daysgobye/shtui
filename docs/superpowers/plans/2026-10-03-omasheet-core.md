@@ -1958,14 +1958,18 @@ git commit -m "feat: CSV reader with delimiter sniffing and guarded number infer
 - [ ] **Step 1: Write the failing test file `tests/grid_keys.rs`**
 
 ```rust
-//! Headless keybinding tests. `egui::Context::run_ui` runs one UI pass with
-//! synthesised input and no window, so these are real tests, not descriptions
-//! of intent.
+//! Headless keybinding and interaction tests. `egui::Context::run_ui` runs UI
+//! passes with synthesised input and no window, so these are real tests, not
+//! descriptions of intent.
 
-use egui::{Event, Key, Modifiers, Pos2, RawInput, Rect};
+use egui::{Event, Key, Modifiers, Pos2, RawInput, Rect, Vec2};
 use omasheet::app::app::OmaApp;
 use omasheet::ui::grid::*;
 use omasheet::workbook::cell::{CellRange, CellRef, CellValue};
+
+fn screen() -> Rect {
+    Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 700.0))
+}
 
 /// A key-down event for `k`.
 fn key(k: Key) -> Vec<Event> {
@@ -1978,6 +1982,20 @@ fn key(k: Key) -> Vec<Event> {
     }]
 }
 
+/// A key-down event carrying the shift modifier.
+fn shift_key(k: Key) -> Vec<Event> {
+    vec![Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    }]
+}
+
 /// A text-input event, as produced by typing.
 fn type_text(s: &str) -> Vec<Event> {
     vec![Event::Text(s.to_owned())]
@@ -1985,12 +2003,15 @@ fn type_text(s: &str) -> Vec<Event> {
 
 /// Drive one UI pass over `app` with `events`, with no window on screen.
 fn pass(app: &mut OmaApp, events: Vec<Event>) {
+    pass_with(app, events, Modifiers::default())
+}
+
+/// As `pass`, but with explicit modifier state. `RawInput.modifiers` is what egui
+/// treats as authoritative — the `modifiers` field on an individual `Event::Key` is
+/// informational, and relying on it silently makes every modifier test pass vacuously.
+fn pass_with(app: &mut OmaApp, events: Vec<Event>, modifiers: Modifiers) {
     let ctx = egui::Context::default();
-    let input = RawInput {
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1100.0, 700.0))),
-        events,
-        ..Default::default()
-    };
+    let input = RawInput { screen_rect: Some(screen()), events, modifiers, ..Default::default() };
     let _ = ctx.run_ui(input, |ui| {
         // `body`, not `ui`: the production `eframe::App::ui` needs an `eframe::Frame`
         // that cannot be constructed outside a running eframe event loop.
@@ -2015,8 +2036,11 @@ fn arrow_right_moves_the_selection() {
 #[test]
 fn arrow_keys_do_not_move_the_selection_past_zero() {
     let mut app = OmaApp::default();
+    pass(&mut app, key(Key::ArrowDown));
+    pass(&mut app, key(Key::ArrowDown));
     pass(&mut app, key(Key::ArrowUp));
-    pass(&mut app, key(Key::ArrowLeft));
+    pass(&mut app, key(Key::ArrowUp));
+    pass(&mut app, key(Key::ArrowUp));
     assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
 }
 
@@ -2038,29 +2062,106 @@ fn arrow_navigation_moves_the_anchor_with_it() {
 }
 
 #[test]
+fn shift_arrow_extends_the_selection_without_moving_the_anchor() {
+    let mut app = OmaApp::default();
+    let shift = Modifiers { shift: true, ..Modifiers::default() };
+    pass_with(&mut app, shift_key(Key::ArrowDown), shift);
+    pass_with(&mut app, shift_key(Key::ArrowRight), shift);
+    assert_eq!(app.grid.selection.anchor, CellRef::new(0, 0, 0));
+    assert_eq!(app.grid.selection.active, CellRef::new(0, 1, 1));
+    assert!(!app.grid.selection.is_single());
+    assert_eq!(app.grid.selection.range(), CellRange::new(0, 0, 1, 1));
+}
+
+#[test]
+fn the_selection_cannot_be_moved_outside_the_scrollable_extent() {
+    // 300 presses on an empty sheet, whose scrollable extent is MIN_ROWS rows.
+    // Without clamping the highlight would sit outside the content with no way back.
+    let mut app = OmaApp::default();
+    for _ in 0..300 {
+        pass(&mut app, key(Key::ArrowDown));
+    }
+    assert_eq!(app.grid.selection.active, CellRef::new(0, 199, 0));
+}
+
+#[test]
 fn cell_at_pos_maps_a_pointer_back_to_a_cell() {
-    // A1's top-left in grid content coordinates is (HEADER_W, HEADER_H).
-    let origin = Pos2::new(0.0, 0.0);
+    // Content coordinates start at the body origin, so A1's top-left is (0, 0).
+    let origin = Pos2::new(100.0, 50.0);
+    assert_eq!(cell_at_pos(origin, Pos2::new(104.0, 54.0)), Some((0, 0)));
     assert_eq!(
-        cell_at_pos(origin, Pos2::new(HEADER_W + 4.0, HEADER_H + 4.0)),
+        cell_at_pos(origin, Pos2::new(100.0 + COL_W + 4.0, 50.0 + ROW_H + 4.0)),
+        Some((1, 1))
+    );
+}
+
+#[test]
+fn cell_at_pos_returns_nothing_outside_the_body() {
+    let origin = Pos2::new(100.0, 50.0);
+    // Above and to the left of the body — which is where the frozen headers live.
+    assert_eq!(cell_at_pos(origin, Pos2::new(95.0, 55.0)), None);
+    assert_eq!(cell_at_pos(origin, Pos2::new(105.0, 45.0)), None);
+}
+
+#[test]
+fn click_to_selection_maps_a_body_click_to_a_cell() {
+    let origin = Pos2::new(100.0, 50.0);
+    assert_eq!(
+        click_to_selection(origin, Pos2::new(104.0, 54.0), 0),
         Some(CellRef::new(0, 0, 0))
     );
     assert_eq!(
-        cell_at_pos(origin, Pos2::new(HEADER_W + COL_W + 4.0, HEADER_H + ROW_H + 4.0)),
-        Some(CellRef::new(0, 1, 1))
+        click_to_selection(origin, Pos2::new(100.0 + COL_W * 3.0 + 4.0, 50.0 + ROW_H * 2.0 + 4.0), 0),
+        Some(CellRef::new(0, 2, 3))
     );
 }
 
 #[test]
-fn cell_at_pos_returns_nothing_over_the_headers() {
-    let origin = Pos2::new(0.0, 0.0);
-    assert_eq!(cell_at_pos(origin, Pos2::new(5.0, 5.0)), None);
+fn click_to_selection_qualifies_the_cell_with_the_active_sheet() {
+    // The sheet comes from the caller, never hard-coded: `cell_at_pos` knows nothing
+    // about which sheet is showing.
+    assert_eq!(
+        click_to_selection(Pos2::ZERO, Pos2::new(4.0, 4.0), 7),
+        Some(CellRef::new(7, 0, 0))
+    );
 }
 
 #[test]
-fn cell_at_pos_returns_nothing_to_the_left_of_the_grid() {
-    let origin = Pos2::new(0.0, 0.0);
-    assert_eq!(cell_at_pos(origin, Pos2::new(-10.0, HEADER_H + 4.0)), None);
+fn click_to_selection_ignores_a_click_outside_the_body() {
+    // A click on the frozen headers or the corner box must not select a cell.
+    let origin = Pos2::new(100.0, 50.0);
+    assert_eq!(click_to_selection(origin, Pos2::new(95.0, 55.0), 0), None);
+    assert_eq!(click_to_selection(origin, Pos2::new(105.0, 45.0), 0), None);
+}
+
+#[test]
+fn visible_window_is_bounded_by_the_viewport_plus_overscan() {
+    // Virtualisation: a 5000-row sheet must not paint 5000 rows.
+    let clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 700.0));
+    let win = visible_window(clip, Pos2::ZERO, 5_000, 100);
+    assert!(win.first_row == 0);
+    assert!(win.last_row < 100, "painted {} rows", win.last_row);
+    assert!(win.cell_count() < 10_000, "painted {} cells", win.cell_count());
+}
+
+#[test]
+fn visible_window_clamps_to_the_sheet_extent() {
+    let clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 700.0));
+    let win = visible_window(clip, Pos2::ZERO, 3, 2);
+    assert_eq!(win.first_row, 0);
+    assert_eq!(win.last_row, 3);
+    assert_eq!(win.first_col, 0);
+    assert_eq!(win.last_col, 2);
+}
+
+#[test]
+fn visible_window_scrolls_with_the_origin() {
+    // A scrolled-down origin must shift the window down with it.
+    let clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 700.0));
+    let origin = Pos2::new(0.0, -5_000.0);
+    let win = visible_window(clip, origin, 5_000, 100);
+    assert!(win.first_row > 200, "first_row was {}", win.first_row);
+    assert!(win.last_row - win.first_row < 100);
 }
 
 #[test]
@@ -2118,12 +2219,16 @@ Expected: compile failure — `unresolved import omasheet::ui::grid`, and `OmaAp
 //! widgets. A grid shows thousands of cells per frame, and allocating a widget per
 //! cell is the difference between smooth scrolling and visible lag. Hit-testing is
 //! likewise arithmetic against computed rectangles rather than per-cell interaction.
+//!
+//! The header gutters are reserved *outside* the scrolling body, so row numbers and
+//! column letters stay frozen while the cells scroll beneath them.
 
 use eframe::egui::{
-    self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, Visuals,
+    self, vec2, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder,
+    Vec2, Visuals,
 };
 
-use crate::workbook::cell::{col_to_letters, CellRef};
+use crate::workbook::cell::{col_to_letters, CellRef, SheetId};
 use crate::workbook::Workbook;
 
 pub const ROW_H: f32 = 22.0;
@@ -2185,9 +2290,29 @@ impl GridState {
     }
 }
 
+/// The half-open window of cells to paint, already clamped to the sheet extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisibleWindow {
+    pub first_row: u32,
+    pub last_row: u32,
+    pub first_col: u32,
+    pub last_col: u32,
+}
+
+impl VisibleWindow {
+    pub fn cell_count(&self) -> u64 {
+        let rows = self.last_row.saturating_sub(self.first_row) as u64;
+        let cols = self.last_col.saturating_sub(self.first_col) as u64;
+        rows * cols
+    }
+}
+
 /// The top-left of cell `(row, col)` in grid content coordinates.
+///
+/// Content coordinates start at the body origin: the header gutters are drawn
+/// outside the scroll area, so cells never render underneath the headers.
 pub fn cell_min(row: u32, col: u32) -> Pos2 {
-    Pos2::new(HEADER_W + col as f32 * COL_W, HEADER_H + row as f32 * ROW_H)
+    Pos2::new(col as f32 * COL_W, row as f32 * ROW_H)
 }
 
 /// The rectangle of cell `(row, col)` in grid content coordinates.
@@ -2195,18 +2320,47 @@ pub fn cell_rect(row: u32, col: u32) -> Rect {
     Rect::from_min_size(cell_min(row, col), Vec2::new(COL_W, ROW_H))
 }
 
-/// Map a pointer position to a cell, or `None` when it is over the headers.
-pub fn cell_at_pos(origin: Pos2, pos: Pos2) -> Option<CellRef> {
+/// Map a pointer position to `(row, col)`, or `None` when it is outside the body.
+///
+/// Returns bare coordinates rather than a [`CellRef`]: this function knows nothing
+/// about which sheet is active, so stamping sheet `0` into the result would be a
+/// lie the caller has to remember to correct.
+pub fn cell_at_pos(origin: Pos2, pos: Pos2) -> Option<(u32, u32)> {
     let local = pos - origin;
-    if local.x < HEADER_W || local.y < HEADER_H {
+    if local.x < 0.0 || local.y < 0.0 {
         return None;
     }
-    let col = ((local.x - HEADER_W) / COL_W).floor();
-    let row = ((local.y - HEADER_H) / ROW_H).floor();
-    if row < 0.0 || col < 0.0 {
-        return None;
+    Some((
+        (local.y / ROW_H).floor() as u32,
+        (local.x / COL_W).floor() as u32,
+    ))
+}
+
+/// The selection a click at `pos` should produce, or `None` for a click outside the body.
+///
+/// Split out from [`show`] so the pointer-to-selection mapping is testable without a
+/// window. egui's `Context::run_ui` does not simulate pointer input — verified: a
+/// plain `ui.button` also fails to report `clicked()` under it — so `response.clicked()`
+/// is the one link in this chain that no headless test can reach. Everything else,
+/// including the sheet qualification, is covered here.
+pub fn click_to_selection(origin: Pos2, pos: Pos2, sheet: SheetId) -> Option<CellRef> {
+    cell_at_pos(origin, pos).map(|(row, col)| CellRef::new(sheet, row, col))
+}
+
+/// Which cells the viewport can see, plus `OVERSCAN` margin, clamped to the sheet.
+///
+/// Pure arithmetic, extracted so virtualisation can be tested without a window.
+pub fn visible_window(clip: Rect, origin: Pos2, rows: u32, cols: u32) -> VisibleWindow {
+    let local_min = clip.min - origin;
+    let local_max = clip.max - origin;
+    let row_of = |y: f32| (((y - HEADER_H) / ROW_H).floor() as i64).max(0);
+    let col_of = |x: f32| (((x - HEADER_W) / COL_W).floor() as i64).max(0);
+    VisibleWindow {
+        first_row: (row_of(local_min.y) - OVERSCAN).max(0) as u32,
+        last_row: ((row_of(local_max.y) + OVERSCAN).max(0) as u32).min(rows),
+        first_col: (col_of(local_min.x) - OVERSCAN).max(0) as u32,
+        last_col: ((col_of(local_max.x) + OVERSCAN).max(0) as u32).min(cols),
     }
-    Some(CellRef::new(0, row as u32, col as u32))
 }
 
 /// Row and column counts worth scrolling: at least a screenful, always covering
@@ -2216,8 +2370,16 @@ fn content_extent(wb: &Workbook) -> (u32, u32) {
     (sheet.row_count().max(MIN_ROWS), sheet.col_count().max(MIN_COLS))
 }
 
-/// Apply a movement key to the selection. Returns true when the key was consumed.
-fn handle_key(state: &mut GridState, wb: &Workbook, k: egui::Key, shift: bool) -> bool {
+/// Apply a movement key to the selection, clamped to the scrollable extent so the
+/// highlight can never be moved somewhere unreachable. Returns true when consumed.
+fn handle_key(
+    state: &mut GridState,
+    wb: &Workbook,
+    k: egui::Key,
+    shift: bool,
+    rows: u32,
+    cols: u32,
+) -> bool {
     let sheet = wb.active_id();
     let (mut row, mut col) = (state.selection.active.row, state.selection.active.col);
     match k {
@@ -2228,6 +2390,8 @@ fn handle_key(state: &mut GridState, wb: &Workbook, k: egui::Key, shift: bool) -
         egui::Key::Home => col = 0,
         _ => return false,
     }
+    row = row.min(rows.saturating_sub(1));
+    col = col.min(cols.saturating_sub(1));
     state.selection.active = CellRef::new(sheet, row, col);
     if !shift {
         state.selection.anchor = state.selection.active;
@@ -2242,7 +2406,7 @@ fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, Vec<String>, bool) {
         let mut text = Vec::new();
         for e in &i.events {
             match e {
-                egui::Event::Key { key, pressed: true, repeat: false, .. } => keys.push(*key),
+                egui::Event::Key { key, pressed: true, .. } => keys.push(*key),
                 egui::Event::Text(t) => text.push(t.clone()),
                 _ => {}
             }
@@ -2251,55 +2415,82 @@ fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, Vec<String>, bool) {
     })
 }
 
+/// Draw one run of cell text, clipped to its cell so long values cannot bleed into
+/// neighbouring columns.
+fn paint_cell_text(painter: &egui::Painter, rect: Rect, text: &str, colour: Color32) {
+    if text.is_empty() {
+        return;
+    }
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(14.0), colour);
+    let y = rect.center().y - galley.size().y / 2.0;
+    let inner = Rect::from_min_size(Pos2::new(rect.left() + 4.0, y), galley.size())
+        .intersect(rect);
+    painter.with_clip_rect(inner).galley(
+        Pos2::new(rect.left() + 4.0, y),
+        galley,
+        colour,
+    );
+}
+
 /// Draw the grid and process navigation.
 pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
     let (rows, cols) = content_extent(wb);
-    let content_size = Vec2::new(
-        HEADER_W + cols as f32 * COL_W,
-        HEADER_H + rows as f32 * ROW_H,
-    );
-    let viewport = ui.available_size();
     let visuals = ui.visuals().clone();
+    let outer = ui.available_rect_before_wrap();
 
     let (keys, _text_events, shift) = read_input(ui);
     let mut handled = false;
-    for k in &keys {
-        if handle_key(state, wb, *k, shift) {
-            handled = true;
+    // Keys drive the grid only while no edit is in progress; otherwise arrow keys
+    // would move the caret and the selection in the same frame.
+    if state.edit.is_none() {
+        for k in &keys {
+            if handle_key(state, wb, *k, shift, rows, cols) {
+                handled = true;
+            }
         }
     }
 
-    egui::ScrollArea::both()
-        .max_height(viewport.y)
-        .max_width(viewport.x)
+    let content_size = Vec2::new(cols as f32 * COL_W, rows as f32 * ROW_H);
+    // Reserve the header gutters outside the scroll area. This is what freezes them.
+    let body = Rect::from_min_size(
+        outer.min + vec2(HEADER_W, HEADER_H),
+        vec2(
+            (outer.width() - HEADER_W).max(1.0),
+            (outer.height() - HEADER_H).max(1.0),
+        ),
+    );
+
+    let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
+    let output = egui::ScrollArea::both()
+        .max_height(body.height())
+        .max_width(body.width())
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let (response, painter) =
-                ui.allocate_painter(content_size, Sense::click());
+        .show(&mut body_ui, |ui| {
+            let (response, painter) = ui.allocate_painter(content_size, Sense::click());
             let origin = response.rect.min;
 
-            // `if let` chains require edition 2024, which this crate uses.
             if let Some(pos) = response.interact_pointer_pos().filter(|_| response.clicked())
-                && let Some(hit) = cell_at_pos(origin, pos)
+                && let Some(cell) = click_to_selection(origin, pos, wb.active_id())
             {
-                let cell = CellRef::new(wb.active_id(), hit.row, hit.col);
                 state.selection.active = cell;
                 state.selection.anchor = cell;
                 handled = true;
             }
 
-            paint(state, wb, &painter, &visuals, origin, rows, cols);
+            paint_body(state, wb, &painter, &visuals, origin, rows, cols);
         });
 
+    paint_headers(ui.painter(), &visuals, outer, body, output.state.offset, rows, cols);
+
     if handled {
-        // Immediate mode repaints on demand; without this the highlight and the
-        // edited contents would stay stale until the next unrelated repaint.
+        // Immediate mode repaints on demand; without this the highlight would stay
+        // stale until some unrelated repaint.
         ui.ctx().request_repaint();
     }
 }
 
-/// Paint the headers and the visible window of cells.
-fn paint(
+/// Paint the visible window of cells.
+fn paint_body(
     state: &GridState,
     wb: &Workbook,
     painter: &egui::Painter,
@@ -2308,35 +2499,26 @@ fn paint(
     rows: u32,
     cols: u32,
 ) {
-
-    let header_bg = visuals.widgets.inactive.bg_fill;
-    let grid_line = visuals.widgets.noninteractive.bg_stroke.color;
-    let sheet_id = state.selection.active.sheet;
+    let sheet_id = wb.active_id();
     let sheet = wb.sheet(sheet_id);
     let sel = state.selection.range();
+    let grid_line = visuals.widgets.noninteractive.bg_stroke.color;
+    let win = visible_window(painter.clip_rect(), origin, rows, cols);
 
-    // The clip rect is the ScrollArea's viewport, which is exactly the window we
-    // must paint. Clipping means over-painting the headers is harmless.
-    let clip = painter.clip_rect();
-    let local_min = clip.min - origin;
-    let local_max = clip.max - origin;
-
-    let first_row = ((((local_min.y - HEADER_H) / ROW_H).floor() as i64) - OVERSCAN).max(0) as u32;
-    let last_row = ((((local_max.y - HEADER_H) / ROW_H).ceil() as i64) + OVERSCAN).max(0) as u32;
-    let first_col = ((((local_min.x - HEADER_W) / COL_W).floor() as i64) - OVERSCAN).max(0) as u32;
-    let last_col = ((((local_max.x - HEADER_W) / COL_W).ceil() as i64) + OVERSCAN).max(0) as u32;
-    let last_row = last_row.min(rows);
-    let last_col = last_col.min(cols);
-
-    for row in first_row..last_row {
-        for col in first_col..last_col {
+    for row in win.first_row..win.last_row {
+        for col in win.first_col..win.last_col {
             let rect = cell_rect(row, col).translate(origin.to_vec2());
             let is_active = state.selection.active == CellRef::new(sheet_id, row, col);
             let in_selection = sel.contains(row, col);
             let cell = sheet.get(row, col);
 
             let bg = match cell.and_then(|c| c.format.bg_color) {
-                Some(colour) => Color32::from_rgba_unmultiplied(colour.r, colour.g, colour.b, colour.a),
+                Some(colour) => Color32::from_rgba_unmultiplied(
+                    colour.r,
+                    colour.g,
+                    colour.b,
+                    colour.a,
+                ),
                 None if in_selection && !is_active => visuals.selection.bg_fill,
                 None if row % 2 == 1 => visuals.widgets.inactive.weak_bg_fill,
                 None => Color32::TRANSPARENT,
@@ -2346,7 +2528,6 @@ fn paint(
             }
 
             painter.rect_stroke(rect, 0.0, Stroke::new(1.0, grid_line), StrokeKind::Inside);
-
             if is_active {
                 painter.rect_stroke(
                     rect,
@@ -2357,69 +2538,14 @@ fn paint(
             }
 
             if let Some(cell) = cell {
-                let text = cell.formatted();
-                if !text.is_empty() {
-                    let colour = match cell.format.font_color {
-                        Some(c) => Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a),
-                        None => visuals.text_color(),
-                    };
-                    let galley = painter.layout_no_wrap(
-                        text,
-                        FontId::proportional(14.0),
-                        colour,
-                    );
-                    painter.galley(
-                        Pos2::new(rect.left() + 4.0, rect.center().y - 7.0),
-                        galley,
-                        colour,
-                    );
-                }
+                let colour = match cell.format.font_color {
+                    Some(c) => Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a),
+                    None => visuals.text_color(),
+                };
+                paint_cell_text(painter, rect, &cell.formatted(), colour);
             }
         }
     }
-
-    // Column headers, left to right.
-    let col_header = Rect::from_min_size(
-        origin,
-        Vec2::new(HEADER_W + cols as f32 * COL_W, HEADER_H),
-    );
-    painter.rect_filled(col_header, 0.0, header_bg);
-    for col in 0..last_col {
-        let r = Rect::from_min_size(
-            Pos2::new(origin.x + cell_min(0, col).x, origin.y),
-            Vec2::new(COL_W, HEADER_H),
-        );
-        painter.text(
-            r.center(),
-            Align2::CENTER_CENTER,
-            col_to_letters(col),
-            FontId::proportional(12.0),
-            visuals.weak_text_color(),
-        );
-    }
-
-    // Row headers, top to bottom.
-    for row in first_row..last_row {
-        let r = Rect::from_min_size(
-            Pos2::new(origin.x, origin.y + cell_min(row, 0).y),
-            Vec2::new(HEADER_W, ROW_H),
-        );
-        painter.rect_filled(r, 0.0, header_bg);
-        painter.text(
-            r.center(),
-            Align2::CENTER_CENTER,
-            (row + 1).to_string(),
-            FontId::proportional(12.0),
-            visuals.weak_text_color(),
-        );
-    }
-
-    // The corner box where the two headers meet.
-    painter.rect_filled(
-        Rect::from_min_size(origin, Vec2::new(HEADER_W, HEADER_H)),
-        0.0,
-        header_bg,
-    );
 
     if let Some(edit) = &state.edit {
         let rect = cell_rect(edit.active.row, edit.active.col).translate(origin.to_vec2());
@@ -2430,18 +2556,72 @@ fn paint(
             Stroke::new(2.0, visuals.selection.stroke.color),
             StrokeKind::Middle,
         );
-        let colour = visuals.text_color();
-        let galley = painter.layout_no_wrap(
-            edit.buffer.clone(),
-            FontId::proportional(14.0),
-            colour,
-        );
-        painter.galley(
-            Pos2::new(rect.left() + 4.0, rect.center().y - 7.0),
-            galley,
+        paint_cell_text(painter, rect, &edit.buffer, visuals.text_color());
+    }
+}
+
+/// Paint the frozen row and column headers, shifted by the scroll offset so they
+/// track the content without scrolling away.
+fn paint_headers(
+    painter: &egui::Painter,
+    visuals: &Visuals,
+    outer: Rect,
+    body: Rect,
+    offset: Vec2,
+    rows: u32,
+    cols: u32,
+) {
+    let header_bg = visuals.widgets.inactive.bg_fill;
+    let colour = visuals.weak_text_color();
+
+    // Column headers: the body's width, shifted horizontally by the scroll offset.
+    painter.rect_filled(
+        Rect::from_min_size(Pos2::new(body.min.x, outer.min.y), vec2(body.width(), HEADER_H)),
+        0.0,
+        header_bg,
+    );
+    for col in 0..cols {
+        let x = body.min.x + cell_min(0, col).x - offset.x;
+        if x + COL_W < body.min.x || x > body.max.x {
+            continue;
+        }
+        let r = Rect::from_min_size(Pos2::new(x, outer.min.y), vec2(COL_W, HEADER_H));
+        painter.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            col_to_letters(col),
+            FontId::proportional(12.0),
             colour,
         );
     }
+
+    // Row headers: the body's height, shifted vertically by the scroll offset.
+    painter.rect_filled(
+        Rect::from_min_size(Pos2::new(outer.min.x, body.min.y), vec2(HEADER_W, body.height())),
+        0.0,
+        header_bg,
+    );
+    for row in 0..rows {
+        let y = body.min.y + cell_min(row, 0).y - offset.y;
+        if y + ROW_H < body.min.y || y > body.max.y {
+            continue;
+        }
+        let r = Rect::from_min_size(Pos2::new(outer.min.x, y), vec2(HEADER_W, ROW_H));
+        painter.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            (row + 1).to_string(),
+            FontId::proportional(12.0),
+            colour,
+        );
+    }
+
+    // The corner box where the two headers meet.
+    painter.rect_filled(
+        Rect::from_min_size(outer.min, vec2(HEADER_W, HEADER_H)),
+        0.0,
+        header_bg,
+    );
 }
 ```
 
@@ -2513,9 +2693,9 @@ impl eframe::App for OmaApp {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cargo test --test grid_keys`
-Expected: 12 passed, 0 failed.
+Expected: 19 passed, 0 failed.
 
-If `cell_at_pos` fails to compile with an arity error, a stale call site with the removed `state` parameter survived; it now takes exactly `(origin, pos)`.
+If `cell_at_pos` fails to compile with an arity error, a stale call site survived. Its signature is `(origin, pos) -> Option<(u32, u32)>` — bare coordinates, not a `CellRef`, because it knows nothing about which sheet is active.
 
 - [ ] **Step 6: Run every test**
 
@@ -2789,8 +2969,8 @@ After committing, move the selection. Extend the `Enter`/`Tab` arms:
 
 - [ ] **Step 5: Confirm the editor overlay is already painted**
 
-Task 5's `paint` already ends with an `if let Some(edit) = &state.edit` block that draws
-the cell background, the selection border, and the buffer text. Do **not** add it again —
+Task 5's `paint_body` already ends with an `if let Some(edit) = &state.edit` block that
+clears the cell, strokes the selection border, and draws the buffer. Do **not** add it again —
 a second copy would paint the same rectangle twice per frame.
 
 Open `src/ui/grid.rs`, find that block, and confirm it reads:
@@ -2805,27 +2985,18 @@ Open `src/ui/grid.rs`, find that block, and confirm it reads:
             Stroke::new(2.0, visuals.selection.stroke.color),
             StrokeKind::Middle,
         );
-        let colour = visuals.text_color();
-        let galley = painter.layout_no_wrap(
-            edit.buffer.clone(),
-            FontId::proportional(14.0),
-            colour,
-        );
-        painter.galley(
-            Pos2::new(rect.left() + 4.0, rect.center().y - 7.0),
-            galley,
-            colour,
-        );
+        paint_cell_text(painter, rect, &edit.buffer, visuals.text_color());
     }
 ```
 
-If it is absent, add it at the end of `paint`. If it is present and correct, change
-nothing — this step exists to stop the duplication, and an exact match is the pass case.
+It draws through the shared `paint_cell_text` helper, which is what clips the buffer to
+the cell. If the block is absent, add it at the end of `paint_body`. If it is present and
+correct, change nothing — an exact match is the pass case.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test --test grid_keys`
-Expected: 21 passed, 0 failed — the 12 from Task 5 plus the 9 added here.
+Expected: 28 passed, 0 failed — the 19 from Task 5 plus the 9 added here.
 
 `text_input_is_stored_verbatim_without_inference` is the test most likely to fail. If it does, `parse_input` is not reaching `infer_number` — check that `parse_input` is the function `commit_edit` calls.
 
@@ -2885,4 +3056,4 @@ Three test expectations were also wrong and were corrected rather than the code:
 - `Cell` gains an `input` field in Plan B; Task 2 fixes `Cell` to `{ value, format }`.
 - `parse_input` stores `=`-prefixed input as text until Plan B. Pinned by `parse_input_infers_plain_numbers_only`.
 - Task 6 reads input a second time via `read_input` rather than threading Task 5's `_text_events` binding through. Two calls per frame is not worth the coupling.
-- Test counts ("14 passed", "16 passed", "22 passed", "12 passed", "21 passed") are sanity checks. If a count differs, trust the assertions and reconcile the count.
+- Test counts ("14 passed", "21 passed", "28 passed", "19 passed", "28 passed") are sanity checks. If a count differs, trust the assertions and reconcile the count.
