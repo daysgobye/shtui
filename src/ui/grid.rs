@@ -262,6 +262,47 @@ fn read_text(ui: &egui::Ui) -> Vec<String> {
     })
 }
 
+/// What a pointer event in the grid body means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellAction {
+    /// Nothing: no button was pressed, or the press landed outside the body.
+    None,
+    /// A single click: commit any edit in progress, then select `cell`.
+    Select(CellRef),
+    /// A double click: open an editor seeded from `cell`.
+    Edit(CellRef),
+}
+
+/// Decide what a pointer event at `pos` in the grid body means.
+///
+/// Split out of the `ScrollArea` closure so the decision is testable without a window.
+/// `Context::run_ui` does not simulate pointer input at all, so `Response::clicked` and
+/// `Response::double_clicked` are the second link in this chain that no headless test can
+/// reach — they arrive here as plain booleans instead of being read off a `Response`.
+/// [`click_to_selection`] covers the remaining, pointer-mapping half.
+pub fn click_action(
+    origin: Pos2,
+    pos: Pos2,
+    sheet: SheetId,
+    clicked: bool,
+    double_clicked: bool,
+) -> CellAction {
+    if !(clicked || double_clicked) {
+        return CellAction::None;
+    }
+    let Some(cell) = click_to_selection(origin, pos, sheet) else {
+        return CellAction::None;
+    };
+    // A double click also reports `clicked()`, so it has to be recognised first. Treated
+    // as a single click it would commit and move the selection, and only the *next* click
+    // of the pair would open the editor — on the wrong cell, one click too late.
+    if double_clicked {
+        CellAction::Edit(cell)
+    } else {
+        CellAction::Select(cell)
+    }
+}
+
 /// Begin editing `at`, seeding the buffer with the cell's current text.
 pub fn begin_edit(state: &mut GridState, wb: &Workbook, at: CellRef) {
     let buffer = wb.value_at(at).to_input_string();
@@ -336,7 +377,11 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
                     let last_col = cols.saturating_sub(1);
                     let active = state.selection.active;
                     let (row, col) = match k {
-                        egui::Key::Tab => (active.row, active.col + 1),
+                        // `Shift+Tab` moves left and plain `Tab` moves right, so the
+                        // unshifted case has to be matched first: `Tab` on its own would
+                        // otherwise swallow the shifted one and move right either way.
+                        egui::Key::Tab if !shift => (active.row, active.col + 1),
+                        egui::Key::Tab => (active.row, active.col.saturating_sub(1)),
                         _ if shift => (active.row.saturating_sub(1), active.col),
                         _ => (active.row + 1, active.col),
                     };
@@ -394,15 +439,39 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
             let (response, painter) = ui.allocate_painter(content_size, Sense::click());
             let origin = response.rect.min;
 
-            // `if let` chains require edition 2024, which this crate uses.
-            if let Some(pos) = response
-                .interact_pointer_pos()
-                .filter(|_| response.clicked())
-                && let Some(cell) = click_to_selection(origin, pos, wb.active_id())
-            {
-                state.selection.active = cell;
-                state.selection.anchor = cell;
-                handled = true;
+            let pos = response.interact_pointer_pos();
+            let action = pos.map_or(CellAction::None, |pos| {
+                click_action(
+                    origin,
+                    pos,
+                    wb.active_id(),
+                    response.clicked(),
+                    response.double_clicked(),
+                )
+            });
+            match action {
+                CellAction::None => {}
+                CellAction::Select(cell) => {
+                    // Commit before moving the selection. An edit stays anchored to the
+                    // cell it began on, so moving first would leave the highlight on a
+                    // cell that is not the one being edited, and the next commit-move
+                    // would step the caret from there instead of from the edited cell.
+                    commit_edit(state, wb);
+                    state.selection.active = cell;
+                    state.selection.anchor = cell;
+                    handled = true;
+                }
+                CellAction::Edit(cell) => {
+                    // Double-clicking the cell already open must not reseed the buffer
+                    // from the model, which would throw away what has been typed into it.
+                    if state.edit.as_ref().map(|edit| edit.active) != Some(cell) {
+                        commit_edit(state, wb);
+                        begin_edit(state, wb, cell);
+                    }
+                    state.selection.active = cell;
+                    state.selection.anchor = cell;
+                    handled = true;
+                }
             }
 
             paint_body(state, wb, &painter, &visuals, origin, rows, cols);
