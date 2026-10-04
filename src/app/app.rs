@@ -24,7 +24,7 @@ impl OmaApp {
                 self.load_sheet(sheet);
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("could not read {}: {e:?}", path.display())),
+            Err(e) => self.error = Some(format!("could not read {}: {e}", path.display())),
         }
     }
 }

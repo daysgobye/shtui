@@ -22,11 +22,28 @@ pub enum CsvError {
     Io,
 }
 
+impl std::fmt::Display for CsvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            CsvError::Empty => "the file is empty",
+            CsvError::Utf8 => "the file is not valid UTF-8 text",
+            CsvError::Io => "the file could not be read",
+        };
+        f.write_str(msg)
+    }
+}
+
+impl std::error::Error for CsvError {}
+
 /// Guess the delimiter by parsing the first [`SNIFF_ROWS`] rows with each candidate
-/// and choosing the one whose records agree on column count most often.
+/// and scoring each on `(total fields, agreements)`.
 ///
-/// Disagreement matters more than raw frequency: a file full of semicolons inside
-/// comma-separated fields still splits cleanly on the comma.
+/// Total fields is the primary signal: a delimiter that does not appear splits every
+/// line into one field, so the real delimiter yields the most fields overall.
+/// Agreement — how often the records match the first record's width — is only a
+/// tie-break, because genuinely ragged files have inconsistent widths and must not
+/// lose to a wrong delimiter. Ties fall back to [`CANDIDATES`] order, so a comma
+/// wins any exact tie.
 pub fn sniff_delimiter(text: &str) -> u8 {
     let body = text.trim_start_matches('\u{feff}');
     let mut best = b',';
@@ -51,7 +68,10 @@ pub fn sniff_delimiter(text: &str) -> u8 {
                 }
             }
         }
-        if counts.len() < 2 {
+        // A single record is still scoreable: its field count is a meaningful signal
+        // for a one-row export, and skipping it would make every one-record file look
+        // like a comma-delimited single cell.
+        if counts.is_empty() {
             continue;
         }
 
@@ -117,21 +137,24 @@ pub fn read_csv(text: &str) -> Result<Sheet, CsvError> {
     let mut row: u32 = 0;
 
     for record in reader.records() {
+        // The reader is built over a `&[u8]`, so the only error kind the `csv` crate
+        // can raise here is invalid UTF-8. Any other variant would mean the reader was
+        // swapped for a file-backed one, at which point this mapping must be revisited.
         let record = record.map_err(|_| CsvError::Utf8)?;
-        let mut cells: Vec<Cell> = Vec::with_capacity(record.len());
-        for field in &record {
+        for (col, field) in record.iter().enumerate() {
             let value = match infer_number(field) {
                 Some(n) => CellValue::Number(n),
                 None if field.is_empty() => CellValue::Empty,
                 None => CellValue::Text(field.to_owned()),
             };
-            cells.push(Cell {
-                value,
-                format: Default::default(),
-            });
-        }
-        for (col, cell) in cells.into_iter().enumerate() {
-            sheet.set(row, col as u32, cell);
+            sheet.set(
+                row,
+                col as u32,
+                Cell {
+                    value,
+                    format: Default::default(),
+                },
+            );
         }
         row += 1;
     }
