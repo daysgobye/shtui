@@ -1,0 +1,17 @@
+[package]
+name = "omasheet"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, native spreadsheet. Open a file, work with your data, get out of the way."
+license = "MIT"
+
+[dependencies]
+eframe = "=0.35.0"
+egui = "=0.35.0"
+csv = "=1.4.0"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

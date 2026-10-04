@@ -1,0 +1,1 @@
+// Grid rendering. Defined in Task 5.
