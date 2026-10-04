@@ -329,21 +329,32 @@ single-module change rather than a cross-cutting one:
 The grid is in exactly one of two modes.
 
 - **Navigating** — selection, movement, clipboard, commands.
-- **Editing** — a text cursor in the active cell or the formula bar.
+- **Editing** — the formula bar holds a real text cursor for one cell.
 
-Typing a printable character, pressing `F2`, or double-clicking enters Editing. `Esc`
-cancels and restores the prior content.
+**The formula bar is the only input surface.** Typing a printable character on the grid,
+pressing `F2`, or double-clicking does not open an in-cell editor; it focuses the formula bar
+and loads the target cell into it. One caret-bearing widget means `Backspace`, `Delete`,
+`Home`/`End`, arrow keys within the text and mouse selection are egui's problem rather than
+ours, and there is no second editor that could disagree with the first.
+
+**Typing writes the cell immediately.** There is no pending commit: every keystroke updates
+the model, so `Enter` and `Tab` only *move*. `Esc` restores a snapshot taken when the field
+was first touched in this visit.
+
+The bar's height follows its content, so a long value or a multi-line Lua chunk stays
+readable. It grows up to a cap and scrolls past it, rather than eating the window.
 
 | Key | Action |
 |---|---|
-| `Enter` | Commit, move down |
-| `Shift+Enter` | Commit, move up |
-| `Tab` | Commit, move right |
-| `Shift+Tab` | Commit, move left |
-| `Esc` | Cancel |
+| `Enter` | Move down |
+| `Shift+Enter` | Insert a newline |
+| `Tab` | Move right |
+| `Shift+Tab` | Insert a newline (`Tab` is claimed before `Shift+Tab` can dedent) |
+| `Esc` | Restore the pre-edit snapshot, drop focus |
 
-**Multi-line cell content is not in Milestone 1.** It exists to serve Milestone 2's
-`LUA=` chunks. Leaving it out keeps `Shift+Enter` unambiguous.
+Moving up is the up arrow. `Shift+Enter` no longer commits and moves up: a multi-line field
+in which one chord both inserts a newline and moves the cursor is incoherent, and newlines are
+what Milestone 2's `LUA=` chunks need first. This is the one behaviour traded away here.
 
 ### 6.2 Operations and undo
 
