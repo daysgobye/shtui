@@ -108,7 +108,6 @@ src/
     ribbon.rs       Collapsible formatting ribbon
     sheet_tabs.rs   Sheet list, add/rename/delete/reorder
     dialogs.rs      Open, save, export, recent files, import warning
-  error.rs
 ```
 
 Each module has one clear purpose and is testable in isolation. The `formula/`, `workbook/`,
@@ -135,7 +134,7 @@ UI and parser boundary only.
 
 ```rust
 struct Cell {
-    input:  CellInput,
+    input:  CellInput,   // added with the formula engine; absent until then
     value:  CellValue,
     format: CellFormat,
 }
@@ -175,7 +174,7 @@ struct Sheet {
     id:   SheetId,
     name: String,
     rows: BTreeMap<u32, Row>,
-    used: CellRange,   // cached bounding box of populated cells
+    used: Option<CellRange>,   // cached bounding box of populated cells; None when empty
 }
 
 struct Row { cells: BTreeMap<u32, Cell> }
@@ -458,6 +457,12 @@ format the model should not carry.
 | `Ctrl+B` / `Ctrl+I` / `Ctrl+U` | Bold / italic / underline |
 | `Ctrl+Shift+R` | Toggle ribbon |
 
+**Built in the first core slice:** arrows, `Shift`+arrows, `Home` (column only),
+`Delete`, `Backspace`, `F2`, `Enter`, `Shift+Enter`, `Tab`, `Shift+Tab`, `Esc`.
+**Not yet built:** every `Ctrl` binding, `PageUp`/`PageDown`, `Ctrl+Arrow`, and
+`Ctrl+Home`/`End` — these arrive with the formula, clipboard, and sheet-tab work. The
+table above describes the finished application, not this slice.
+
 ---
 
 ## 8. File I/O
@@ -467,8 +472,11 @@ format the model should not carry.
 - Delimiter sniffed from `,` `;` `\t` `|`. The `csv` crate (1.4) performs the quoting,
   escaping and delimiter handling; Omasheet owns sniffing and number inference, because
   both need the raw field text the crate returns verbatim. Sniff by parsing the first
-  20 rows with each candidate and choosing the delimiter yielding the most consistent
-  column count.
+  20 rows with each candidate and scoring each on `(total fields, agreements)`.
+  **Total fields is primary** — a delimiter that does not appear splits every line into
+  one field — while agreement is only a tie-break, because genuinely ragged files have
+  inconsistent widths and must not lose to a wrong delimiter. Exact ties fall back to
+  candidate order, so a comma wins them.
 - UTF-8, with or without BOM.
 - RFC-4180 quoting, including escaped `""` inside quoted fields.
 - Both LF and CRLF line endings.
