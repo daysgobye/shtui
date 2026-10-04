@@ -410,12 +410,16 @@ away.
 ### 7.1 Grid
 
 - Renders only the visible rows and columns plus a small overscan. This is what keeps
-  60fps at the scale target.
+  60fps at the scale target. The visible window is pure arithmetic extracted from the
+  painter, so virtualisation is unit-tested rather than only observable by eye.
 - A drag-fill handle on the selection's bottom-right corner. Dragging it in either axis
   fills the swept rectangle as a single undo operation.
-- Frozen row and column headers.
-- Uniform default column width with per-column overrides; autosize on double-clicking a
-  header edge.
+- Frozen row and column headers. The header gutters are reserved *outside* the scrolling
+  body, so the letters and numbers stay put while the cells scroll beneath them.
+- The selection cannot be moved outside the scrollable extent, so the highlight is always
+  reachable. **Keeping it scrolled into view is deferred**: the selection may sit off-screen
+  until the user scrolls, rather than the view following the selection automatically.
+- Per-column width overrides; autosize on double-clicking a header edge.
 - Editing happens in-cell, overlaid on the grid. The formula bar mirrors the active
   cell's input; typing in either works.
 
@@ -583,6 +587,15 @@ Each step produces working software.
 ## 11. Deferred to Milestone 2 and Beyond
 
 **Milestone 2**
+
+- Scroll-to-selection: the view does not yet follow the active cell, so keyboard
+  navigation can leave the highlight off-screen. The selection is clamped to the
+  scrollable extent, which prevents losing it, but not needing to scroll to find it.
+- Headless pointer-event testing. `egui::Context::run_ui` does not simulate pointer input —
+  verified: a plain `ui.button` also fails to report `clicked()` under it — so
+  `response.clicked()` cannot be asserted without a window or `egui_kittest`, which
+  requires egui 0.36 and therefore rustc 1.95. The pointer-to-selection mapping is
+  extracted into a pure function and tested; the egui call itself is not.
 
 - Lua engine and sandbox (`LUA=` formulas, cell/column/row/cross-sheet context)
 - Conditional formatting, in both Excel and Lua rule forms
