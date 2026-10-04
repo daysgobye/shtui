@@ -1619,6 +1619,52 @@ fn ragged_rows_stay_sparse_rather_than_materialising_padding() {
 }
 
 #[test]
+fn a_single_record_file_is_still_sniffed() {
+    // A one-row export must not silently parse as one comma-delimited cell.
+    assert_eq!(sniff_delimiter("a\tb\tc\n"), b'\t');
+    assert_eq!(sniff_delimiter("a;b;c\n"), b';');
+    assert_eq!(sniff_delimiter("a|b|c\n"), b'|');
+}
+
+#[test]
+fn a_single_row_tab_file_loads_as_three_columns() {
+    let sheet = read_csv("a\tb\tc\n").unwrap();
+    assert_eq!(sheet.col_count(), 3);
+    assert_eq!(sheet.get(0, 2).unwrap().value, CellValue::Text("c".into()));
+}
+
+#[test]
+fn zero_and_exponent_forms_are_numbers_but_padded_zeros_are_not() {
+    // These are the cases `has_redundant_leading_zero`'s comment names.
+    assert_eq!(infer_number("0e1"), Some(0.0));
+    assert_eq!(infer_number("00.5"), None);
+}
+
+#[test]
+fn reading_a_missing_file_is_an_io_error() {
+    let path = std::env::temp_dir().join("omasheet-no-such-file-4c1f.csv");
+    let _ = std::fs::remove_file(&path);
+    assert!(matches!(read_csv_file(&path), Err(CsvError::Io)));
+}
+
+#[test]
+fn reading_a_file_that_is_not_utf8_is_an_encoding_error() {
+    let path = std::env::temp_dir()
+        .join(format!("omasheet-invalid-utf8-{}.csv", std::process::id()));
+    std::fs::write(&path, [0xffu8, 0xfe, b'A']).expect("temp fixture should be writable");
+    let result = read_csv_file(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(matches!(result, Err(CsvError::Utf8)));
+}
+
+#[test]
+fn csv_errors_render_as_a_sentence_fragment() {
+    assert_eq!(CsvError::Empty.to_string(), "the file is empty");
+    assert_eq!(CsvError::Utf8.to_string(), "the file is not valid UTF-8 text");
+    assert_eq!(CsvError::Io.to_string(), "the file could not be read");
+}
+
+#[test]
 fn an_empty_file_is_an_error_not_a_panic() {
     assert!(matches!(read_csv(""), Err(CsvError::Empty)));
 }
@@ -1667,11 +1713,28 @@ pub enum CsvError {
     Io,
 }
 
+impl std::fmt::Display for CsvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            CsvError::Empty => "the file is empty",
+            CsvError::Utf8 => "the file is not valid UTF-8 text",
+            CsvError::Io => "the file could not be read",
+        };
+        f.write_str(msg)
+    }
+}
+
+impl std::error::Error for CsvError {}
+
 /// Guess the delimiter by parsing the first [`SNIFF_ROWS`] rows with each candidate
-/// and choosing the one whose records agree on column count most often.
+/// and scoring each on `(total fields, agreements)`.
 ///
-/// Disagreement matters more than raw frequency: a file full of semicolons inside
-/// comma-separated fields still splits cleanly on the comma.
+/// Total fields is the primary signal: a delimiter that does not appear splits every
+/// line into one field, so the real delimiter yields the most fields overall.
+/// Agreement — how often the records match the first record's width — is only a
+/// tie-break, because genuinely ragged files have inconsistent widths and must not
+/// lose to a wrong delimiter. Ties fall back to [`CANDIDATES`] order, so a comma
+/// wins any exact tie.
 pub fn sniff_delimiter(text: &str) -> u8 {
     let body = text.trim_start_matches('\u{feff}');
     let mut best = b',';
@@ -1696,7 +1759,10 @@ pub fn sniff_delimiter(text: &str) -> u8 {
                 }
             }
         }
-        if counts.len() < 2 {
+        // A single record is still scoreable: its field count is a meaningful signal
+        // for a one-row export, and skipping it would make every one-record file look
+        // like a comma-delimited single cell.
+        if counts.is_empty() {
             continue;
         }
 
@@ -1762,18 +1828,17 @@ pub fn read_csv(text: &str) -> Result<Sheet, CsvError> {
     let mut row: u32 = 0;
 
     for record in reader.records() {
-            let record = record.map_err(|_| CsvError::Utf8)?;
-        let mut cells: Vec<Cell> = Vec::with_capacity(record.len());
-        for field in &record {
+            // The reader is built over a `&[u8]`, so the only error kind the `csv` crate
+        // can raise here is invalid UTF-8. Any other variant would mean the reader was
+        // swapped for a file-backed one, at which point this mapping must be revisited.
+        let record = record.map_err(|_| CsvError::Utf8)?;
+        for (col, field) in record.iter().enumerate() {
             let value = match infer_number(field) {
                 Some(n) => CellValue::Number(n),
                 None if field.is_empty() => CellValue::Empty,
                 None => CellValue::Text(field.to_owned()),
             };
-            cells.push(Cell { value, format: Default::default() });
-        }
-        for (col, cell) in cells.into_iter().enumerate() {
-            sheet.set(row, col as u32, cell);
+            sheet.set(row, col as u32, Cell { value, format: Default::default() });
         }
         row += 1;
     }
@@ -1798,7 +1863,7 @@ pub fn read_csv_file(path: &Path) -> Result<Sheet, CsvError> {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --test csv_read`
-Expected: 22 passed, 0 failed.
+Expected: 28 passed, 0 failed.
 
 - [ ] **Step 5: Lint**
 
@@ -1841,7 +1906,7 @@ impl OmaApp {
                 self.load_sheet(sheet);
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("could not read {}: {e:?}", path.display())),
+            Err(e) => self.error = Some(format!("could not read {}: {e}", path.display())),
         }
     }
 }
@@ -2419,7 +2484,7 @@ impl OmaApp {
                 self.load_sheet(sheet);
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("could not read {}: {e:?}", path.display())),
+            Err(e) => self.error = Some(format!("could not read {}: {e}", path.display())),
         }
     }
 
