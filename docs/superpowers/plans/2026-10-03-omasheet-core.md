@@ -2953,8 +2953,15 @@ pub fn cancel_edit(state: &mut GridState) {
 Then extend `show` to drive the edit lifecycle, inserted before the `ScrollArea`:
 
 ```rust
-    // Editing lifecycle.
-    let (_keys, text_events, _shift) = read_input(ui);
+    // Editing lifecycle. `read_input` deliberately does not collect text — it returns
+    // only keys and the shift flag — so the text events are read here, in the one place
+    // that needs them.
+    let text_events: Vec<String> = ui.input(|i| {
+        i.events.iter().filter_map(|e| match e {
+            egui::Event::Text(t) => Some(t.clone()),
+            _ => None,
+        }).collect()
+    });
 
     if state.edit.is_some() {
         for t in &text_events {
