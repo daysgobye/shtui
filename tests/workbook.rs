@@ -1,5 +1,6 @@
 use omasheet::workbook::Workbook;
 use omasheet::workbook::cell::*;
+use omasheet::workbook::sheet::Sheet;
 
 #[test]
 fn a_new_workbook_has_one_named_sheet() {
@@ -176,4 +177,61 @@ fn removing_a_sheet_reassigns_the_active_id() {
     assert_eq!(wb.active_id(), 0);
     assert_eq!(wb.sheet_name(0), "Two");
     assert_eq!(wb.sheet_name(1), "Three");
+}
+
+#[test]
+fn clearing_an_interior_cell_leaves_the_used_range_untouched() {
+    // Removing an interior cell cannot change the bounding box, so `remove` must
+    // return without rebuilding it. Both `rows_iterate_in_column_order_and_skip_holes`
+    // and this test would break if the fast path were dropped.
+    let mut wb = Workbook::new();
+    wb.set_cell(CellRef::new(0, 0, 0), CellValue::Number(1.0));
+    wb.set_cell(CellRef::new(0, 5, 5), CellValue::Number(2.0));
+    wb.set_cell(CellRef::new(0, 9, 9), CellValue::Number(3.0));
+    wb.clear_cell(CellRef::new(0, 5, 5));
+    let used = wb.active().used().expect("sheet is not empty");
+    assert_eq!(used.min_row, 0);
+    assert_eq!(used.min_col, 0);
+    assert_eq!(used.max_row, 9);
+    assert_eq!(used.max_col, 9);
+}
+
+#[test]
+fn clearing_a_cell_that_is_absent_does_not_mark_the_workbook_dirty() {
+    // Pressing Delete on an empty cell must not make the app claim unsaved changes.
+    let mut wb = Workbook::new();
+    wb.clear_dirty();
+    wb.clear_cell(CellRef::new(0, 3, 3));
+    assert!(!wb.dirty());
+}
+
+#[test]
+fn value_at_reads_a_missing_cell_as_empty() {
+    // The contract the grid and the later formula engine both rely on.
+    let mut wb = Workbook::new();
+    assert_eq!(wb.value_at(CellRef::new(0, 7, 7)), CellValue::Empty);
+    wb.set_cell(CellRef::new(0, 7, 7), CellValue::Number(5.0));
+    assert_eq!(wb.value_at(CellRef::new(0, 7, 7)), CellValue::Number(5.0));
+}
+
+#[test]
+fn iter_cells_visits_every_cell_in_row_major_order() {
+    // The contract save and CSV export depend on.
+    let mut wb = Workbook::new();
+    wb.set_cell(CellRef::new(0, 2, 1), CellValue::Text("b".into()));
+    wb.set_cell(CellRef::new(0, 0, 3), CellValue::Text("a".into()));
+    wb.set_cell(CellRef::new(0, 1, 0), CellValue::Text("c".into()));
+    let coords: Vec<(u32, u32)> = wb.active().iter_cells().map(|(r, c, _)| (r, c)).collect();
+    assert_eq!(coords, vec![(0, 3), (1, 0), (2, 1)]);
+}
+
+#[test]
+fn replace_sheet_stamps_the_id_so_it_matches_its_index() {
+    let mut wb = Workbook::new();
+    wb.add_sheet("Two");
+    // A reader may hand back a sheet built with the wrong id; the workbook must not
+    // end up holding a sheet whose `id()` disagrees with its position.
+    let sheet = Sheet::new(99, "Loaded");
+    wb.replace_sheet(1, sheet);
+    assert_eq!(wb.sheet(1).id(), 1);
 }

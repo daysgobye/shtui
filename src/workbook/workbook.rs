@@ -152,12 +152,15 @@ impl Workbook {
         self.dirty = true;
     }
 
+    /// Clear one cell. A no-op clear leaves the dirty flag alone, so pressing Delete on
+    /// an empty cell does not mark the workbook as needing a save.
     pub fn clear_cell(&mut self, at: CellRef) {
         if at.sheet >= self.sheets.len() {
             return;
         }
-        self.sheets[at.sheet].remove(at.row, at.col);
-        self.dirty = true;
+        if self.sheets[at.sheet].remove(at.row, at.col).is_some() {
+            self.dirty = true;
+        }
     }
 
     pub fn dirty(&self) -> bool {
@@ -174,8 +177,9 @@ impl Workbook {
 
     /// Load a sheet produced by a reader, replacing the workbook's contents.
     /// Used by file open in a later plan; defined here so the seam exists.
-    pub fn replace_sheet(&mut self, id: SheetId, sheet: Sheet) {
+    pub fn replace_sheet(&mut self, id: SheetId, mut sheet: Sheet) {
         if id < self.sheets.len() {
+            sheet.set_id(id);
             self.sheets[id] = sheet;
             self.dirty = true;
         }

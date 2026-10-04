@@ -9,12 +9,27 @@ use std::collections::BTreeMap;
 use super::cell::{Cell, CellRange, SheetId};
 
 /// One row of cells, keyed by column index.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Row {
     cells: BTreeMap<u32, Cell>,
+    /// Cached column bounds, kept in step with `cells`.
+    ///
+    /// Without these, recomputing a sheet's used range walks every populated cell in
+    /// the sheet rather than every row, which makes repeated single-cell clears
+    /// quadratic. `min_col`/`max_col` are O(1).
+    min_col: u32,
+    max_col: u32,
 }
 
 impl Row {
+    fn new() -> Self {
+        Self {
+            cells: BTreeMap::new(),
+            min_col: u32::MAX,
+            max_col: 0,
+        }
+    }
+
     pub fn get(&self, col: u32) -> Option<&Cell> {
         self.cells.get(&col)
     }
@@ -24,11 +39,25 @@ impl Row {
     }
 
     pub fn set(&mut self, col: u32, cell: Cell) {
+        if self.cells.is_empty() {
+            self.min_col = col;
+            self.max_col = col;
+        } else {
+            self.min_col = self.min_col.min(col);
+            self.max_col = self.max_col.max(col);
+        }
         self.cells.insert(col, cell);
     }
 
     pub fn remove(&mut self, col: u32) -> Option<Cell> {
-        self.cells.remove(&col)
+        let removed = self.cells.remove(&col)?;
+        if !self.cells.is_empty() && (col == self.min_col || col == self.max_col) {
+            // A boundary column was removed, so the cached bounds are stale. Rebuilding
+            // costs one pass over this row's keys, bounded by the row's width.
+            self.min_col = self.cells.keys().copied().min().unwrap_or(u32::MAX);
+            self.max_col = self.cells.keys().copied().max().unwrap_or(0);
+        }
+        Some(removed)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -40,11 +69,11 @@ impl Row {
     }
 
     pub fn min_col(&self) -> u32 {
-        self.cells.keys().copied().min().unwrap_or(0)
+        self.min_col
     }
 
     pub fn max_col(&self) -> u32 {
-        self.cells.keys().copied().max().unwrap_or(0)
+        self.max_col
     }
 }
 
@@ -71,6 +100,10 @@ impl Sheet {
         self.id
     }
 
+    pub fn set_id(&mut self, id: SheetId) {
+        self.id = id;
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -93,11 +126,16 @@ impl Sheet {
             Some(r) => r.union(&CellRange::new(row, col, row, col)),
             None => CellRange::new(row, col, row, col),
         });
-        self.rows.entry(row).or_default().set(col, cell);
+        self.rows.entry(row).or_insert_with(Row::new).set(col, cell);
     }
 
-    /// Remove a cell, shrinking the used range only if the removed cell was on
-    /// its boundary. An empty sheet reports `None` rather than a degenerate range.
+    /// Remove a cell and keep the used range correct.
+    ///
+    /// Removing an interior cell cannot change the bounding box, so that case returns
+    /// without touching it. Only a removal on the box's boundary triggers a rebuild,
+    /// and because [`Row`] caches its own column bounds the rebuild costs one pass over
+    /// the sheet's rows rather than over every populated cell. An emptied sheet reports
+    /// `None` rather than a degenerate range.
     pub fn remove(&mut self, row: u32, col: u32) -> Option<Cell> {
         let removed = {
             let row_entry = self.rows.get_mut(&row)?;
@@ -108,31 +146,38 @@ impl Sheet {
             removed
         }?;
 
-        if self.used.is_some() {
-            let mut min_row = u32::MAX;
-            let mut max_row = 0u32;
-            let mut min_col = u32::MAX;
-            let mut max_col = 0u32;
-            for (r, row_entry) in &self.rows {
-                if row_entry.is_empty() {
-                    continue;
-                }
-                min_row = min_row.min(*r);
-                max_row = max_row.max(*r);
-                min_col = min_col.min(row_entry.min_col());
-                max_col = max_col.max(row_entry.max_col());
-            }
-            self.used = if self.rows.is_empty() {
-                None
-            } else {
-                Some(CellRange {
-                    min_row,
-                    min_col,
-                    max_row,
-                    max_col,
-                })
-            };
+        let Some(used) = self.used else {
+            return Some(removed);
+        };
+        let touched_boundary = row == used.min_row
+            || row == used.max_row
+            || col == used.min_col
+            || col == used.max_col;
+        if !touched_boundary {
+            return Some(removed);
         }
+
+        if self.rows.is_empty() {
+            self.used = None;
+            return Some(removed);
+        }
+
+        let mut min_row = u32::MAX;
+        let mut max_row = 0u32;
+        let mut min_col = u32::MAX;
+        let mut max_col = 0u32;
+        for (r, row_entry) in &self.rows {
+            min_row = min_row.min(*r);
+            max_row = max_row.max(*r);
+            min_col = min_col.min(row_entry.min_col());
+            max_col = max_col.max(row_entry.max_col());
+        }
+        self.used = Some(CellRange {
+            min_row,
+            min_col,
+            max_row,
+            max_col,
+        });
         Some(removed)
     }
 
