@@ -306,6 +306,18 @@ fn cell_range_bounds_a_rectangle() {
 }
 
 #[test]
+fn cell_range_new_normalises_unsorted_bounds() {
+    // `new` is total: unsorted corners are ordered rather than underflowing `rows()`.
+    let r = CellRange::new(5, 4, 1, 2);
+    assert_eq!(r.min_row, 1);
+    assert_eq!(r.min_col, 2);
+    assert_eq!(r.max_row, 5);
+    assert_eq!(r.max_col, 4);
+    assert_eq!(r.rows(), 5);
+    assert_eq!(r.cols(), 3);
+}
+
+#[test]
 fn cell_range_of_two_cells_normalises_corner_order() {
     let r = CellRange::from_corners((9, 9), (2, 1));
     assert_eq!(r.min_row, 2);
@@ -650,8 +662,8 @@ impl Cell {
     }
 }
 
-/// A half-open-by-inclusion rectangle of cells, always normalised so that
-/// `min_*` is the top-left corner.
+/// An inclusive rectangle of cells, always normalised so that `min_*` is the
+/// top-left corner and `max_*` the bottom-right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CellRange {
     pub min_row: u32,
@@ -671,8 +683,15 @@ impl CellRange {
         }
     }
 
+    /// Build from explicit bounds, normalising them.
+    ///
+    /// Delegates to [`CellRange::from_corners`] so `new` is total. Storing the four
+    /// values verbatim would let unsorted corners produce a range whose `rows()`
+    /// underflows — a panic in debug, a silent wrap to ~4.29 billion in release.
+    /// Later tasks build ranges from UI drag state and from parsed references, so
+    /// this constructor must not depend on its callers having sorted the corners.
     pub fn new(min_row: u32, min_col: u32, max_row: u32, max_col: u32) -> Self {
-        Self { min_row, min_col, max_row, max_col }
+        Self::from_corners((min_row, min_col), (max_row, max_col))
     }
 
     pub fn rows(&self) -> u32 {
@@ -749,7 +768,7 @@ pub fn parse_a1(s: &str) -> Option<(u32, u32)> {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --test cell`
-Expected: 13 passed, 0 failed.
+Expected: 14 passed, 0 failed.
 
 - [ ] **Step 5: Lint**
 
@@ -2323,7 +2342,7 @@ impl eframe::App for OmaApp {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cargo test --test grid_keys`
-Expected: 13 passed, 0 failed.
+Expected: 12 passed, 0 failed.
 
 If `cell_at_pos` fails to compile with an arity error, a stale call site with the removed `state` parameter survived; it now takes exactly `(origin, pos)`.
 
@@ -2635,7 +2654,7 @@ nothing — this step exists to stop the duplication, and an exact match is the 
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test --test grid_keys`
-Expected: all pass.
+Expected: 21 passed, 0 failed — the 12 from Task 5 plus the 9 added here.
 
 `text_input_is_stored_verbatim_without_inference` is the test most likely to fail. If it does, `parse_input` is not reaching `infer_number` — check that `parse_input` is the function `commit_edit` calls.
 
@@ -2695,4 +2714,4 @@ Three test expectations were also wrong and were corrected rather than the code:
 - `Cell` gains an `input` field in Plan B; Task 2 fixes `Cell` to `{ value, format }`.
 - `parse_input` stores `=`-prefixed input as text until Plan B. Pinned by `parse_input_infers_plain_numbers_only`.
 - Task 6 reads input a second time via `read_input` rather than threading Task 5's `_text_events` binding through. Two calls per frame is not worth the coupling.
-- Test counts ("13 passed", "16 passed", "22 passed", "12 passed") are sanity checks. If a count differs, trust the assertions and reconcile the count.
+- Test counts ("14 passed", "16 passed", "22 passed", "12 passed", "21 passed") are sanity checks. If a count differs, trust the assertions and reconcile the count.
