@@ -65,18 +65,31 @@ fn cell_range_of_two_cells_normalises_corner_order() {
 fn number_format_renders_values_for_display() {
     assert_eq!(NumberFormat::General.apply(&CellValue::Number(3.5)), "3.5");
     assert_eq!(NumberFormat::Integer.apply(&CellValue::Number(3.7)), "4");
-    assert_eq!(NumberFormat::Decimal(2).apply(&CellValue::Number(1.23456)), "1.23");
     assert_eq!(
-        NumberFormat::Currency { symbol: '$', places: 2 }.apply(&CellValue::Number(1234.5)),
+        NumberFormat::Decimal(2).apply(&CellValue::Number(1.23456)),
+        "1.23"
+    );
+    assert_eq!(
+        NumberFormat::Currency {
+            symbol: '$',
+            places: 2
+        }
+        .apply(&CellValue::Number(1234.5)),
         "$1,234.50"
     );
-    assert_eq!(NumberFormat::Percent(1).apply(&CellValue::Number(0.456)), "45.6%");
+    assert_eq!(
+        NumberFormat::Percent(1).apply(&CellValue::Number(0.456)),
+        "45.6%"
+    );
     assert_eq!(NumberFormat::Text.apply(&CellValue::Number(3.5)), "3.5");
 }
 
 #[test]
 fn number_format_passes_text_and_errors_through() {
-    assert_eq!(NumberFormat::Decimal(2).apply(&CellValue::Text("hi".into())), "hi");
+    assert_eq!(
+        NumberFormat::Decimal(2).apply(&CellValue::Text("hi".into())),
+        "hi"
+    );
     assert_eq!(
         NumberFormat::General.apply(&CellValue::Error(ErrorKind::DivZero)),
         "#DIV/0!"
@@ -86,7 +99,10 @@ fn number_format_passes_text_and_errors_through() {
 
 #[test]
 fn thousands_separators_group_correctly() {
-    let f = NumberFormat::Currency { symbol: '$', places: 2 };
+    let f = NumberFormat::Currency {
+        symbol: '$',
+        places: 2,
+    };
     assert_eq!(f.apply(&CellValue::Number(999.0)), "$999.00");
     assert_eq!(f.apply(&CellValue::Number(1000.0)), "$1,000.00");
     assert_eq!(f.apply(&CellValue::Number(1234567.891)), "$1,234,567.89");
@@ -105,12 +121,30 @@ fn default_cell_is_empty_and_untouched() {
 
 #[test]
 fn errors_render_with_their_excel_spelling() {
-    assert_eq!(CellValue::Error(ErrorKind::DivZero).to_display_string(), "#DIV/0!");
-    assert_eq!(CellValue::Error(ErrorKind::Value).to_display_string(), "#VALUE!");
-    assert_eq!(CellValue::Error(ErrorKind::Name).to_display_string(), "#NAME?");
-    assert_eq!(CellValue::Error(ErrorKind::Ref).to_display_string(), "#REF!");
-    assert_eq!(CellValue::Error(ErrorKind::Circular).to_display_string(), "#CIRCULAR!");
-    assert_eq!(CellValue::Error(ErrorKind::Num).to_display_string(), "#NUM!");
+    assert_eq!(
+        CellValue::Error(ErrorKind::DivZero).to_display_string(),
+        "#DIV/0!"
+    );
+    assert_eq!(
+        CellValue::Error(ErrorKind::Value).to_display_string(),
+        "#VALUE!"
+    );
+    assert_eq!(
+        CellValue::Error(ErrorKind::Name).to_display_string(),
+        "#NAME?"
+    );
+    assert_eq!(
+        CellValue::Error(ErrorKind::Ref).to_display_string(),
+        "#REF!"
+    );
+    assert_eq!(
+        CellValue::Error(ErrorKind::Circular).to_display_string(),
+        "#CIRCULAR!"
+    );
+    assert_eq!(
+        CellValue::Error(ErrorKind::Num).to_display_string(),
+        "#NUM!"
+    );
 }
 
 #[test]
@@ -126,7 +160,10 @@ fn cell_formated_display_applies_the_number_format() {
     let c = Cell {
         value: CellValue::Number(1234.5),
         format: CellFormat {
-            number_format: NumberFormat::Currency { symbol: '$', places: 2 },
+            number_format: NumberFormat::Currency {
+                symbol: '$',
+                places: 2,
+            },
             ..Default::default()
         },
     };

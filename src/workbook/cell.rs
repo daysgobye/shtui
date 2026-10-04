@@ -76,7 +76,10 @@ pub enum NumberFormat {
     General,
     Integer,
     Decimal(u32),
-    Currency { symbol: char, places: u32 },
+    Currency {
+        symbol: char,
+        places: u32,
+    },
     Percent(u32),
     Date,
     Time,
@@ -275,7 +278,12 @@ impl CellRange {
     }
 
     pub fn new(min_row: u32, min_col: u32, max_row: u32, max_col: u32) -> Self {
-        Self { min_row, min_col, max_row, max_col }
+        Self {
+            min_row,
+            min_col,
+            max_row,
+            max_col,
+        }
     }
 
     pub fn rows(&self) -> u32 {
