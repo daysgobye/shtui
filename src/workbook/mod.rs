@@ -1,7 +1,7 @@
 pub mod cell;
 pub mod sheet;
-// The design document fixes this file's name as `workbook/workbook.rs`, which clippy
-// reads as a module named like its parent. The layout is deliberate; silence the lint
-// rather than rename a file the spec specifies.
+// Private now that callers have a path to the type: `omasheet::workbook::Workbook`.
+// The file name stays as the design document specifies, so the lint stays silenced.
 #[allow(clippy::module_inception)]
-pub mod workbook;
+mod workbook;
+pub use workbook::Workbook;
