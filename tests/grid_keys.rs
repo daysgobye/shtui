@@ -259,13 +259,37 @@ fn a_large_sheet_paints_without_error() {
 }
 
 #[test]
-fn a_text_event_is_ignored_while_navigating() {
-    // Editing lands in Task 6. This pins the behaviour so that task changes it
-    // deliberately rather than discovering it as a surprise.
+fn a_text_event_starts_an_edit_rather_than_navigating() {
+    // This pin was written in Task 5 to record that typing did *not* yet edit, so that
+    // Task 6 would change it deliberately. It now asserts the deliberate change: the
+    // text opens an edit, leaves the selection where it was, and reaches the model only
+    // on commit.
     let mut app = OmaApp::default();
     pass(&mut app, type_text("hi"));
-    assert!(app.grid.edit.is_none());
+    assert_eq!(
+        app.grid.edit.as_ref().map(|e| e.buffer.as_str()),
+        Some("hi")
+    );
+    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
     assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
+}
+
+#[test]
+fn arrow_keys_do_not_move_the_selection_while_editing() {
+    // An edit owns the caret. If navigation also ran, the highlight would slide out
+    // from under the editor and Enter would commit relative to the wrong cell.
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("7"));
+    pass(&mut app, key(Key::ArrowDown));
+    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
+    assert_eq!(app.grid.edit.as_ref().map(|e| e.buffer.as_str()), Some("7"));
+}
+
+#[test]
+fn a_control_only_text_event_does_not_open_an_edit() {
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("\t"));
+    assert!(app.grid.edit.is_none());
 }
 
 #[test]
@@ -273,4 +297,105 @@ fn selection_starts_as_a_single_cell() {
     let state = GridState::new();
     assert!(state.selection.is_single());
     assert_eq!(state.selection.range(), CellRange::new(0, 0, 0, 0));
+}
+
+#[test]
+fn typing_a_character_starts_editing_with_that_character() {
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("7"));
+    let edit = app.grid.edit.as_ref().expect("typing should start an edit");
+    assert_eq!(edit.buffer, "7");
+    assert_eq!(edit.active, CellRef::new(0, 0, 0));
+}
+
+#[test]
+fn enter_commits_the_edit_and_moves_down() {
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("7"));
+    pass(&mut app, key(Key::Enter));
+    assert!(app.grid.edit.is_none());
+    assert_eq!(
+        app.wb.value_at(CellRef::new(0, 0, 0)),
+        CellValue::Number(7.0)
+    );
+    assert_eq!(app.grid.selection.active, CellRef::new(0, 1, 0));
+}
+
+#[test]
+fn tab_commits_the_edit_and_moves_right() {
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("7"));
+    pass(&mut app, key(Key::Tab));
+    assert_eq!(
+        app.wb.value_at(CellRef::new(0, 0, 0)),
+        CellValue::Number(7.0)
+    );
+    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 1));
+}
+
+#[test]
+fn escape_cancels_the_edit_and_leaves_the_cell_alone() {
+    let mut app = OmaApp::default();
+    app.wb
+        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("original".into()));
+    pass(&mut app, type_text("clobbered"));
+    pass(&mut app, key(Key::Escape));
+    assert!(app.grid.edit.is_none());
+    assert_eq!(
+        app.wb.value_at(CellRef::new(0, 0, 0)),
+        CellValue::Text("original".into())
+    );
+}
+
+#[test]
+fn f2_starts_an_edit_seeded_with_the_current_text() {
+    let mut app = OmaApp::default();
+    app.wb
+        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("rent".into()));
+    pass(&mut app, key(Key::F2));
+    let edit = app.grid.edit.as_ref().expect("F2 should start an edit");
+    assert_eq!(edit.buffer, "rent");
+}
+
+#[test]
+fn delete_clears_the_active_cell_and_marks_dirty() {
+    let mut app = OmaApp::default();
+    app.wb
+        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("rent".into()));
+    app.wb.clear_dirty();
+    pass(&mut app, key(Key::Delete));
+    assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
+    assert!(app.wb.dirty());
+}
+
+#[test]
+fn editing_an_empty_cell_and_committing_empty_leaves_it_empty() {
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("x"));
+    pass(&mut app, key(Key::Escape));
+    assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
+    assert!(!app.wb.dirty());
+}
+
+#[test]
+fn text_input_is_stored_verbatim_without_inference() {
+    let mut app = OmaApp::default();
+    pass(&mut app, type_text("00123"));
+    pass(&mut app, key(Key::Enter));
+    // Leading-zero identifiers must survive as text; this is the rule the CSV
+    // reader also enforces.
+    assert_eq!(
+        app.wb.value_at(CellRef::new(0, 0, 0)),
+        CellValue::Text("00123".into())
+    );
+}
+
+#[test]
+fn parse_input_infers_plain_numbers_only() {
+    assert_eq!(parse_input("42"), CellValue::Number(42.0));
+    assert_eq!(parse_input("3.50"), CellValue::Number(3.5));
+    assert_eq!(parse_input("00123"), CellValue::Text("00123".into()));
+    assert_eq!(parse_input(""), CellValue::Empty);
+    assert_eq!(parse_input("hello"), CellValue::Text("hello".into()));
+    assert_eq!(parse_input("=A1+B1"), CellValue::Text("=A1+B1".into()));
 }

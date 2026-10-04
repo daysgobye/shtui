@@ -16,7 +16,25 @@ use eframe::egui::{
 };
 
 use crate::workbook::Workbook;
-use crate::workbook::cell::{CellRef, SheetId, col_to_letters};
+use crate::workbook::cell::{CellRef, CellValue, SheetId, col_to_letters};
+
+/// Interpret typed text as a cell value.
+///
+/// The same guarded rule the CSV reader uses, so the same characters mean the same
+/// thing however they entered the sheet: `NaN`, `inf` and redundant leading zeros stay
+/// text. Text is stored exactly as typed — no trimming, no case folding.
+///
+/// Formulas are not implemented in this plan. `=`-prefixed input is stored as text so
+/// nothing is silently reinterpreted; a later plan changes this deliberately.
+pub fn parse_input(s: &str) -> CellValue {
+    if s.is_empty() {
+        return CellValue::Empty;
+    }
+    match crate::io::csv_read::infer_number(s) {
+        Some(n) => CellValue::Number(n),
+        None => CellValue::Text(s.to_owned()),
+    }
+}
 
 pub const ROW_H: f32 = 22.0;
 pub const COL_W: f32 = 100.0;
@@ -226,6 +244,56 @@ fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, bool) {
     })
 }
 
+/// Collect this frame's text-input events.
+///
+/// A second `ui.input` pass rather than a third element on [`read_input`]'s tuple:
+/// `Ui::input` takes `FnOnce(&InputState)`, so one closure can build one owned
+/// collection, and threading a second one through would couple every caller to the
+/// edit lifecycle for no gain at two calls a frame.
+fn read_text(ui: &egui::Ui) -> Vec<String> {
+    ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// Begin editing `at`, seeding the buffer with the cell's current text.
+pub fn begin_edit(state: &mut GridState, wb: &Workbook, at: CellRef) {
+    let buffer = wb.value_at(at).to_input_string();
+    state.edit = Some(EditState { active: at, buffer });
+}
+
+/// Commit the in-progress edit into the model. Does nothing if no edit is active.
+pub fn commit_edit(state: &mut GridState, wb: &mut Workbook) {
+    let Some(edit) = state.edit.take() else {
+        return;
+    };
+    wb.set_cell(edit.active, parse_input(&edit.buffer));
+}
+
+/// Abandon the in-progress edit.
+pub fn cancel_edit(state: &mut GridState) {
+    state.edit = None;
+}
+
+/// Every cell in the selection rectangle, in row-major order.
+fn selection_cells(state: &GridState) -> Vec<CellRef> {
+    let sheet = state.selection.active.sheet;
+    let r = state.selection.range();
+    let mut out = Vec::new();
+    for row in r.min_row..=r.max_row {
+        for col in r.min_col..=r.max_col {
+            out.push(CellRef::new(sheet, row, col));
+        }
+    }
+    out
+}
+
 /// Draw the grid and process navigation.
 pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
     let (rows, cols) = content_extent(wb);
@@ -245,11 +313,74 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
 
     // An edit owns the caret; moving the selection underneath it would fight the edit.
     let mut handled = false;
-    if state.edit.is_none() {
-        let (keys, shift) = read_input(ui);
+    let (keys, shift) = read_input(ui);
+    let text = read_text(ui);
+
+    if state.edit.is_some() {
+        // Continuing an edit. The keystroke that opened it was consumed by the branch
+        // below, so nothing here can double-apply the first character.
+        for t in &text {
+            if let Some(edit) = state.edit.as_mut() {
+                edit.buffer.push_str(t);
+            }
+            handled = true;
+        }
         for k in &keys {
-            if handle_key(state, wb, rows, cols, *k, shift) {
-                handled = true;
+            match k {
+                egui::Key::Enter | egui::Key::Tab => {
+                    commit_edit(state, wb);
+                    // The caret lands where a spreadsheet puts it: down, up under shift,
+                    // or right for Tab. Clamped like every other move, so committing the
+                    // last cell cannot strand the highlight off the content rect.
+                    let last_row = rows.saturating_sub(1);
+                    let last_col = cols.saturating_sub(1);
+                    let active = state.selection.active;
+                    let (row, col) = match k {
+                        egui::Key::Tab => (active.row, active.col + 1),
+                        _ if shift => (active.row.saturating_sub(1), active.col),
+                        _ => (active.row + 1, active.col),
+                    };
+                    state.selection.active =
+                        CellRef::new(active.sheet, row.min(last_row), col.min(last_col));
+                    state.selection.anchor = state.selection.active;
+                    handled = true;
+                }
+                egui::Key::Escape => {
+                    cancel_edit(state);
+                    handled = true;
+                }
+                _ => {}
+            }
+        }
+    } else if keys.contains(&egui::Key::F2) {
+        begin_edit(state, wb, state.selection.active);
+        handled = true;
+    } else if let Some(t) = text.iter().find(|t| !t.chars().all(char::is_control)) {
+        // Control-only text cannot start an edit. egui-winit already filters it at the
+        // source, but `Event::Text`'s own contract only asks an integration to withhold
+        // text for Enter — a backend that leaks it must not open a cell editor.
+        state.edit = Some(EditState {
+            active: state.selection.active,
+            buffer: t.clone(),
+        });
+        handled = true;
+    } else {
+        // Not editing, and nothing typed: navigate, or clear the selection. F2 and text
+        // have already had their turn above, so the keystroke that starts an edit never
+        // also moves the selection out from under the caret.
+        for k in &keys {
+            match k {
+                egui::Key::Delete | egui::Key::Backspace => {
+                    for cell in selection_cells(state) {
+                        wb.clear_cell(cell);
+                    }
+                    handled = true;
+                }
+                _ => {
+                    if handle_key(state, wb, rows, cols, *k, shift) {
+                        handled = true;
+                    }
+                }
             }
         }
     }
