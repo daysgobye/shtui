@@ -1,0 +1,5 @@
+/target
+*.swp
+
+# Scratch workspace for superpowers subagent-driven-development runs.
+.superpowers/
