@@ -53,6 +53,18 @@ fn cell_range_bounds_a_rectangle() {
 }
 
 #[test]
+fn cell_range_new_normalises_unsorted_bounds() {
+    // `new` is total: unsorted corners are ordered rather than underflowing `rows()`.
+    let r = CellRange::new(5, 4, 1, 2);
+    assert_eq!(r.min_row, 1);
+    assert_eq!(r.min_col, 2);
+    assert_eq!(r.max_row, 5);
+    assert_eq!(r.max_col, 4);
+    assert_eq!(r.rows(), 5);
+    assert_eq!(r.cols(), 3);
+}
+
+#[test]
 fn cell_range_of_two_cells_normalises_corner_order() {
     let r = CellRange::from_corners((9, 9), (2, 1));
     assert_eq!(r.min_row, 2);

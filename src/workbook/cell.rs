@@ -256,8 +256,8 @@ impl Cell {
     }
 }
 
-/// A half-open-by-inclusion rectangle of cells, always normalised so that
-/// `min_*` is the top-left corner.
+/// An inclusive rectangle of cells, always normalised so that `min_*` is the
+/// top-left corner and `max_*` the bottom-right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CellRange {
     pub min_row: u32,
@@ -277,13 +277,15 @@ impl CellRange {
         }
     }
 
+    /// Build from explicit bounds, normalising them.
+    ///
+    /// Delegates to [`CellRange::from_corners`] so `new` is total. Storing the four
+    /// values verbatim would let unsorted corners produce a range whose `rows()`
+    /// underflows — a panic in debug, a silent wrap to ~4.29 billion in release.
+    /// Later tasks build ranges from UI drag state and from parsed references, so
+    /// this constructor must not depend on its callers having sorted the corners.
     pub fn new(min_row: u32, min_col: u32, max_row: u32, max_col: u32) -> Self {
-        Self {
-            min_row,
-            min_col,
-            max_row,
-            max_col,
-        }
+        Self::from_corners((min_row, min_col), (max_row, max_col))
     }
 
     pub fn rows(&self) -> u32 {
