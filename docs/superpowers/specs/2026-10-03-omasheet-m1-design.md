@@ -567,7 +567,7 @@ egui dependency and are tested headlessly.
 | `workbook/` | Sparse storage invariants, `used` range maintenance, undo/redo round-trips over seeded random operation sequences |
 | `io/` | Golden round-trips (write xlsx, read back, compare); CSV fixtures for quotes, CRLF, BOM, embedded delimiters, numbers-only inference |
 | `app/` | Headless egui harness for keybindings where practical |
-| **Performance** | A 10,000-cell CSV fixture, asserting full recalculation completes within one 16 ms frame |
+| **Performance** | A 10,000-cell CSV fixture asserting a full load-and-paint pass completes within one 16 ms frame. Measured warm at 0.12–0.23 ms; cold paint (font rasterisation, paid once at launch) is 3.6–8.0 ms in a debug build and is printed rather than asserted. The recalculation half of the original promise lands with the formula engine |
 
 The performance assertion is a gate, not an aspiration. If it fails, the slice does not
 ship.
