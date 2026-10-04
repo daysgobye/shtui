@@ -172,6 +172,28 @@ pub enum CellValue {
 }
 
 impl CellValue {
+    /// Interpret raw text as a cell value. The one conversion rule for every text
+    /// that enters a sheet: typed into the grid, pasted, sniffed from a CSV, or read
+    /// from xlsx. They all agree because they all come through here.
+    ///
+    /// Empty text becomes [`CellValue::Empty`] — an empty value, not an empty string.
+    /// Everything that parses as a number under [`infer_number`]'s three conditions
+    /// becomes a [`CellValue::Number`]; everything else is stored verbatim as text, with
+    /// no trimming and no case folding.
+    ///
+    /// Text is stored exactly as given. `=`-prefixed input is text here too, so nothing
+    /// is silently reinterpreted while formulas are unimplemented; a later plan changes
+    /// that at this one seam.
+    pub fn from_text(text: &str) -> CellValue {
+        if text.is_empty() {
+            return CellValue::Empty;
+        }
+        match infer_number(text) {
+            Some(n) => CellValue::Number(n),
+            None => CellValue::Text(text.to_owned()),
+        }
+    }
+
     /// The `General`-formatted representation of this value.
     pub fn to_display_string(&self) -> String {
         match self {
@@ -220,6 +242,37 @@ impl CellValue {
             _ => None,
         }
     }
+}
+
+/// Decide whether a raw field is a number.
+///
+/// Three conditions, all necessary:
+/// 1. it parses as `f64`;
+/// 2. the result is finite, which rejects `NaN` and `inf` that Rust otherwise accepts;
+/// 3. the integer part has no redundant leading zero, so `00123` stays text.
+///
+/// Private to this module and reachable only through [`CellValue::from_text`]: it is a
+/// rule about what a *cell* holds, and it deliberately has no importer-shaped callers, so
+/// the CSV reader cannot grow a subtly different copy of it.
+fn infer_number(field: &str) -> Option<f64> {
+    if field.is_empty() {
+        return None;
+    }
+    let value: f64 = field.parse().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    if has_redundant_leading_zero(field) {
+        return None;
+    }
+    Some(value)
+}
+
+fn has_redundant_leading_zero(field: &str) -> bool {
+    let digits = field.strip_prefix(['+', '-']).unwrap_or(field);
+    let bytes = digits.as_bytes();
+    // "0", "0.5" and "0e1" are all fine; "01" and "00.5" are not.
+    bytes.len() >= 2 && bytes[0] == b'0' && bytes[1].is_ascii_digit()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

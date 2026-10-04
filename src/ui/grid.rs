@@ -18,24 +18,6 @@ use eframe::egui::{
 use crate::workbook::Workbook;
 use crate::workbook::cell::{CellRef, CellValue, SheetId, col_to_letters};
 
-/// Interpret typed text as a cell value.
-///
-/// The same guarded rule the CSV reader uses, so the same characters mean the same
-/// thing however they entered the sheet: `NaN`, `inf` and redundant leading zeros stay
-/// text. Text is stored exactly as typed — no trimming, no case folding.
-///
-/// Formulas are not implemented in this plan. `=`-prefixed input is stored as text so
-/// nothing is silently reinterpreted; a later plan changes this deliberately.
-pub fn parse_input(s: &str) -> CellValue {
-    if s.is_empty() {
-        return CellValue::Empty;
-    }
-    match crate::io::csv_read::infer_number(s) {
-        Some(n) => CellValue::Number(n),
-        None => CellValue::Text(s.to_owned()),
-    }
-}
-
 pub const ROW_H: f32 = 22.0;
 pub const COL_W: f32 = 100.0;
 pub const HEADER_W: f32 = 48.0;
@@ -314,7 +296,14 @@ pub fn commit_edit(state: &mut GridState, wb: &mut Workbook) {
     let Some(edit) = state.edit.take() else {
         return;
     };
-    wb.set_cell(edit.active, parse_input(&edit.buffer));
+    match CellValue::from_text(&edit.buffer) {
+        // Committing an empty buffer clears the cell rather than storing an empty
+        // one: `set_cell` would extend the used range and mark the workbook dirty,
+        // which is how an F2-then-Enter on an untouched cell used to claim unsaved
+        // changes. `clear_cell` is already no-op safe for an absent cell.
+        CellValue::Empty => wb.clear_cell(edit.active),
+        value => wb.set_cell(edit.active, value),
+    }
 }
 
 /// Abandon the in-progress edit.
@@ -571,9 +560,12 @@ fn paint_body(
 /// Paint the column and row headers, and the corner box, in screen space.
 ///
 /// `offset` is the body's scroll offset, so a label's screen position is its content
-/// position minus the offset. Labels outside their band are skipped rather than
-/// clipped, so a 5,000-row sheet costs one pass over the visible band, not over every
-/// row in it.
+/// position minus the offset. The loops run over every row and every column, so
+/// *iteration* is not bounded by the viewport — what is bounded is painting: a label
+/// whose band falls outside the gutter is skipped rather than drawn or clipped. A
+/// 5,000-row sheet therefore costs 5,000 cheap bounds tests per frame to paint about 30
+/// labels. Making the iteration bounded too would mean binary-searching the first and
+/// last visible index, which is left alone until the loop cost is actually measured.
 fn paint_headers(
     painter: &egui::Painter,
     visuals: &Visuals,

@@ -34,44 +34,6 @@ fn a_bom_does_not_stop_sniffing() {
 }
 
 #[test]
-fn numbers_are_inferred_when_unambiguous() {
-    assert_eq!(infer_number("42"), Some(42.0));
-    assert_eq!(infer_number("3.50"), Some(3.5));
-    assert_eq!(infer_number("-7"), Some(-7.0));
-    assert_eq!(infer_number("+7"), Some(7.0));
-    assert_eq!(infer_number("0"), Some(0.0));
-    assert_eq!(infer_number("0.5"), Some(0.5));
-    assert_eq!(infer_number("1e3"), Some(1000.0));
-}
-
-#[test]
-fn leading_zero_identifiers_stay_text() {
-    assert_eq!(infer_number("00123"), None);
-    assert_eq!(infer_number("007"), None);
-    assert_eq!(infer_number("-0042"), None);
-}
-
-#[test]
-fn non_numeric_fields_are_not_numbers() {
-    assert_eq!(infer_number(""), None);
-    assert_eq!(infer_number("abc"), None);
-    assert_eq!(infer_number("42abc"), None);
-    assert_eq!(infer_number(" 42"), None);
-    assert_eq!(infer_number("42 "), None);
-    assert_eq!(infer_number("1,234"), None);
-}
-
-#[test]
-fn rust_parses_these_but_we_still_reject_them() {
-    // `f64::from_str` accepts all of these; a spreadsheet must not.
-    assert!("NaN".parse::<f64>().is_ok(), "Rust really does accept this");
-    assert_eq!(infer_number("NaN"), None);
-    assert_eq!(infer_number("inf"), None);
-    assert_eq!(infer_number("-inf"), None);
-    assert_eq!(infer_number("infinity"), None);
-}
-
-#[test]
 fn a_simple_csv_loads_into_a_sheet() {
     let sheet = read_csv("a,b\n1,2\n3,4\n").unwrap();
     assert_eq!(sheet.row_count(), 3);
@@ -190,13 +152,6 @@ fn a_single_row_tab_file_loads_as_three_columns() {
 }
 
 #[test]
-fn zero_and_exponent_forms_are_numbers_but_padded_zeros_are_not() {
-    // These are the cases `has_redundant_leading_zero`'s comment names.
-    assert_eq!(infer_number("0e1"), Some(0.0));
-    assert_eq!(infer_number("00.5"), None);
-}
-
-#[test]
 fn reading_a_missing_file_is_an_io_error() {
     let path = std::env::temp_dir().join("omasheet-no-such-file-4c1f.csv");
     let _ = std::fs::remove_file(&path);
@@ -221,4 +176,30 @@ fn csv_errors_render_as_a_sentence_fragment() {
         "the file is not valid UTF-8 text"
     );
     assert_eq!(CsvError::Io.to_string(), "the file could not be read");
+}
+
+/// The reader and the grid editor share one conversion, so the same field means the same
+/// thing however it entered the sheet. This is the pin for that sharing: were the CSV
+/// reader to grow its own copy of the rule, the tricky cases would drift apart here first.
+#[test]
+fn the_reader_and_the_editor_agree_on_every_field() {
+    let fields = [
+        "42", "3.50", "-7", "00123", "abc", " 42", "1,234", "NaN", "00.5", "0e1",
+    ];
+    // Quoted, because `"1,234"` would otherwise be read as two fields — and quoting also
+    // confirms the value reaching the conversion is the raw field, not a split fragment.
+    let header = fields
+        .iter()
+        .map(|f| format!("\"{f}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sheet = read_csv(&header).expect("single-row fixture should parse");
+    for (col, field) in fields.iter().enumerate() {
+        assert_eq!(
+            sheet.get(0, col as u32).map(|c| c.value.clone()),
+            Some(CellValue::from_text(field)),
+            "reader and editor disagreed about {:?}",
+            field
+        );
+    }
 }

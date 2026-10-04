@@ -181,9 +181,12 @@ fn removing_a_sheet_reassigns_the_active_id() {
 
 #[test]
 fn clearing_an_interior_cell_leaves_the_used_range_untouched() {
-    // Removing an interior cell cannot change the bounding box, so `remove` must
-    // return without rebuilding it. Both `rows_iterate_in_column_order_and_skip_holes`
-    // and this test would break if the fast path were dropped.
+    // Removing an interior cell cannot change the bounding box, so `remove` returns without
+    // rebuilding it. Note this cell *is* on the box's boundary — every column is, here — so
+    // this test does exercise the rebuild path, and it still passes if the fast path is
+    // dropped, as does `rows_iterate_in_column_order_and_skip_holes`, which never touches
+    // the cache at all. What the cache buys is not correctness here but the size of the
+    // rebuild: bounded by the sheet's row count rather than its populated-cell count.
     let mut wb = Workbook::new();
     wb.set_cell(CellRef::new(0, 0, 0), CellValue::Number(1.0));
     wb.set_cell(CellRef::new(0, 5, 5), CellValue::Number(2.0));

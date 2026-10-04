@@ -181,3 +181,93 @@ fn cell_formated_display_applies_the_number_format() {
     };
     assert_eq!(c.formatted(), "$1,234.50");
 }
+
+// --- `CellValue::from_text`: the one conversion rule for all incoming text. Moved here
+// from the CSV reader and the grid's `parse_input` when the rule moved into the model, so
+// these assert against the public seam rather than the private guard behind it. ---
+
+#[test]
+fn from_text_infers_plain_numbers_only() {
+    assert_eq!(CellValue::from_text("42"), CellValue::Number(42.0));
+    assert_eq!(CellValue::from_text("3.50"), CellValue::Number(3.5));
+    assert_eq!(
+        CellValue::from_text("00123"),
+        CellValue::Text("00123".into())
+    );
+    assert_eq!(CellValue::from_text(""), CellValue::Empty);
+    assert_eq!(
+        CellValue::from_text("hello"),
+        CellValue::Text("hello".into())
+    );
+    // Formulas are unimplemented, so `=`-prefixed text stays text rather than being
+    // silently reinterpreted as something else.
+    assert_eq!(
+        CellValue::from_text("=A1+B1"),
+        CellValue::Text("=A1+B1".into())
+    );
+}
+
+#[test]
+fn numbers_are_inferred_when_unambiguous() {
+    assert_eq!(CellValue::from_text("-7"), CellValue::Number(-7.0));
+    assert_eq!(CellValue::from_text("+7"), CellValue::Number(7.0));
+    assert_eq!(CellValue::from_text("0"), CellValue::Number(0.0));
+    assert_eq!(CellValue::from_text("0.5"), CellValue::Number(0.5));
+    assert_eq!(CellValue::from_text("1e3"), CellValue::Number(1000.0));
+}
+
+#[test]
+fn leading_zero_identifiers_stay_text() {
+    assert_eq!(CellValue::from_text("007"), CellValue::Text("007".into()));
+    assert_eq!(
+        CellValue::from_text("-0042"),
+        CellValue::Text("-0042".into())
+    );
+}
+
+#[test]
+fn non_numeric_fields_are_not_numbers() {
+    assert_eq!(CellValue::from_text("abc"), CellValue::Text("abc".into()));
+    assert_eq!(
+        CellValue::from_text("42abc"),
+        CellValue::Text("42abc".into())
+    );
+    // Surrounding whitespace is not trimmed: it neither parses nor is discarded.
+    assert_eq!(CellValue::from_text(" 42"), CellValue::Text(" 42".into()));
+    assert_eq!(CellValue::from_text("42 "), CellValue::Text("42 ".into()));
+    // Grouped digits are not a number in any locale this reader claims to speak.
+    assert_eq!(
+        CellValue::from_text("1,234"),
+        CellValue::Text("1,234".into())
+    );
+}
+
+#[test]
+fn rust_parses_these_but_we_still_reject_them() {
+    // `f64::from_str` accepts all of these; a spreadsheet must not.
+    assert!("NaN".parse::<f64>().is_ok(), "Rust really does accept this");
+    assert_eq!(CellValue::from_text("NaN"), CellValue::Text("NaN".into()));
+    assert_eq!(CellValue::from_text("inf"), CellValue::Text("inf".into()));
+    assert_eq!(CellValue::from_text("-inf"), CellValue::Text("-inf".into()));
+    assert_eq!(
+        CellValue::from_text("infinity"),
+        CellValue::Text("infinity".into())
+    );
+}
+
+#[test]
+fn zero_and_exponent_forms_are_numbers_but_padded_zeros_are_not() {
+    // These are the cases `has_redundant_leading_zero`'s comment names.
+    assert_eq!(CellValue::from_text("0e1"), CellValue::Number(0.0));
+    assert_eq!(CellValue::from_text("00.5"), CellValue::Text("00.5".into()));
+}
+
+#[test]
+fn from_text_round_trips_through_the_input_string() {
+    // The editor seeds its buffer with `to_input_string` and commits through
+    // `from_text`, so text that survives one survives the round trip unchanged.
+    for s in ["42", "3.50", "hello", "00123"] {
+        let value = CellValue::from_text(s);
+        assert_eq!(CellValue::from_text(&value.to_input_string()), value);
+    }
+}
