@@ -53,6 +53,25 @@ VBA, cloud features, collaboration.
 
 ## 3. Module Layout
 
+### 3.0 Verified toolchain and API constraints
+
+These were verified against source on 2026-10-03, not assumed. They are load-bearing, and
+egui's API has been changing quickly enough that writing them down is cheaper than
+rediscovering them.
+
+| Fact | Value |
+|---|---|
+| `eframe` / `egui` | **0.35.0**, pinned with `=` |
+| Why not 0.36 | 0.36.2 declares `rust-version = "1.95"`; this machine has **rustc 1.94.0** and does not build it |
+| Renderer | `wgpu` (an eframe default feature) — confirmed running under Wayland |
+| `App` trait method | `fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame)` — **not** `update(ctx, frame)`; renamed in 0.35 |
+| `AppCreator` | returns `Result<Box<dyn App>, DynError>` |
+| `ui.add(widget)` | returns `egui::Response` in 0.35 (0.36 returns `TextEditOutput`) |
+| Headless UI tests | `egui::Context::run_ui(RawInput, impl FnMut(&mut Ui)) -> FullOutput`. `egui_kittest` is 0.36 and unusable here |
+| Scroll introspection | `ScrollArea::show` returns `ScrollAreaOutput` with `.state.offset: Vec2` and `.content_size: Vec2` |
+
+### 3.1 Modules
+
 ```
 src/
   main.rs
@@ -440,20 +459,33 @@ format the model should not carry.
 
 ### 8.1 Opening a CSV
 
-- Delimiter sniffed from `,` `;` `\t` `|`.
+- Delimiter sniffed from `,` `;` `\t` `|`. The `csv` crate (1.4) performs the quoting,
+  escaping and delimiter handling; Omasheet owns sniffing and number inference, because
+  both need the raw field text the crate returns verbatim. Sniff by parsing the first
+  20 rows with each candidate and choosing the delimiter yielding the most consistent
+  column count.
 - UTF-8, with or without BOM.
 - RFC-4180 quoting, including escaped `""` inside quoted fields.
 - Both LF and CRLF line endings.
 - **Row 1 is data, not a header.** Omasheet has no header concept, which keeps the
   CSV-to-grid mapping lossless.
 
-**Type inference: numbers only.** A field that parses strictly as a number becomes a
-number; everything else stays `Text`. There is no date inference and no boolean
-inference.
+**Type inference: numbers only, and only unambiguous ones.** A field becomes a `Number`
+if and only if all three conditions hold:
 
-This is deliberate. Silently converting `00123` to `123`, or `true` to a boolean, is how
-spreadsheets eat data — and once the file is saved as xlsx, the loss is permanent and the
-CSV on disk no longer matches what is on screen.
+1. It parses as `f64`.
+2. The result is finite — which rejects `NaN`, `inf`, and `-inf`, all of which Rust's
+   `f64::from_str` otherwise accepts.
+3. Its integer part has no redundant leading zero, so `0` and `0.5` qualify but `00123`
+   does not.
+
+Everything else stays `Text`. There is no date inference and no boolean inference.
+
+Condition 3 is the whole point. A bare "parses as a number" rule would satisfy the
+literal wording above while silently turning `00123` into `123` — which is exactly how a
+spreadsheet eats data, and it becomes permanent the moment the file is saved as xlsx.
+The three conditions together give the behaviour the wording was reaching for: `3.50`
+becomes `3.5`, while a leading-zero identifier stays text.
 
 ### 8.2 Opening an xlsx
 
