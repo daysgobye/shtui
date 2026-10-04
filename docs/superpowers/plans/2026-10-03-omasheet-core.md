@@ -3061,7 +3061,7 @@ Open `src/ui/grid.rs`, find that block, and confirm it reads:
             Stroke::new(2.0, visuals.selection.stroke.color),
             StrokeKind::Middle,
         );
-        paint_cell_text(painter, rect, &edit.buffer.clone(), visuals.text_color());
+        paint_cell_text(painter, rect, edit.buffer.clone(), visuals.text_color());
     }
 ```
 
