@@ -110,9 +110,12 @@ pub mod sheet;
 // reads as a module named like its parent. The layout is deliberate; silence the lint
 // rather than rename a file the spec specifies.
 #[allow(clippy::module_inception)]
-mod workbook;
-pub use workbook::Workbook;
+pub mod workbook;
 ```
+
+No re-export yet: `workbook.rs` is an empty placeholder until Task 3 defines `Workbook`,
+so `pub use workbook::Workbook;` would not compile here. Task 3 makes it private and adds
+the re-export.
 
 `src/io/mod.rs`:
 ```rust
@@ -756,6 +759,7 @@ git commit -m "feat: core cell value types, formats and address helpers"
 **Files:**
 - Create: `src/workbook/sheet.rs` (replace placeholder)
 - Create: `src/workbook/workbook.rs` (replace placeholder)
+- Modify: `src/workbook/mod.rs`
 - Create: `tests/workbook.rs`
 
 **Interfaces:**
@@ -1285,7 +1289,21 @@ impl Workbook {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 5: Make `workbook` a private module and re-export `Workbook`**
+
+Replace `src/workbook/mod.rs` with:
+
+```rust
+pub mod cell;
+pub mod sheet;
+// Private now that callers have a path to the type: `omasheet::workbook::Workbook`.
+// The file name stays as the design document specifies, so the lint stays silenced.
+#[allow(clippy::module_inception)]
+mod workbook;
+pub use workbook::Workbook;
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test --test workbook`
 Expected: 16 passed, 0 failed.
@@ -2564,19 +2582,23 @@ After committing, move the selection. Extend the `Enter`/`Tab` arms:
             }
 ```
 
-- [ ] **Step 5: Paint the editor over the active cell**
+- [ ] **Step 5: Confirm the editor overlay is already painted**
 
-At the end of `paint`, before the function closes:
+Task 5's `paint` already ends with an `if let Some(edit) = &state.edit` block that draws
+the cell background, the selection border, and the buffer text. Do **not** add it again —
+a second copy would paint the same rectangle twice per frame.
+
+Open `src/ui/grid.rs`, find that block, and confirm it reads:
 
 ```rust
     if let Some(edit) = &state.edit {
-        let rect = cell_rect(edit.active.row, edit.active.col) + origin.to_vec();
+        let rect = cell_rect(edit.active.row, edit.active.col).translate(origin.to_vec2());
         painter.rect_filled(rect, 0.0, visuals.extreme_bg_color);
         painter.rect_stroke(
             rect,
             0.0,
             Stroke::new(2.0, visuals.selection.stroke.color),
-            egui::StrokeKind::Middle,
+            StrokeKind::Middle,
         );
         let colour = visuals.text_color();
         let galley = painter.layout_no_wrap(
@@ -2591,6 +2613,9 @@ At the end of `paint`, before the function closes:
         );
     }
 ```
+
+If it is absent, add it at the end of `paint`. If it is present and correct, change
+nothing — this step exists to stop the duplication, and an exact match is the pass case.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
