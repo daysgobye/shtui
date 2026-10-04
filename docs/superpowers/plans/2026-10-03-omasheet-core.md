@@ -800,6 +800,7 @@ git commit -m "feat: core cell value types, formats and address helpers"
 
 ```rust
 use omasheet::workbook::cell::*;
+use omasheet::workbook::sheet::Sheet;
 use omasheet::workbook::Workbook;
 
 #[test]
@@ -909,6 +910,63 @@ fn formatting_a_cell_does_not_change_its_value() {
 }
 
 #[test]
+fn clearing_an_interior_cell_leaves_the_used_range_untouched() {
+    // Removing an interior cell cannot change the bounding box, so `remove` must
+    // return without rebuilding it. Both `rows_iterate_in_column_order_and_skip_holes`
+    // and this test would break if the fast path were dropped.
+    let mut wb = Workbook::new();
+    wb.set_cell(CellRef::new(0, 0, 0), CellValue::Number(1.0));
+    wb.set_cell(CellRef::new(0, 5, 5), CellValue::Number(2.0));
+    wb.set_cell(CellRef::new(0, 9, 9), CellValue::Number(3.0));
+    wb.clear_cell(CellRef::new(0, 5, 5));
+    let used = wb.active().used().expect("sheet is not empty");
+    assert_eq!(used.min_row, 0);
+    assert_eq!(used.min_col, 0);
+    assert_eq!(used.max_row, 9);
+    assert_eq!(used.max_col, 9);
+}
+
+#[test]
+fn clearing_a_cell_that_is_absent_does_not_mark_the_workbook_dirty() {
+    // Pressing Delete on an empty cell must not make the app claim unsaved changes.
+    let mut wb = Workbook::new();
+    wb.clear_dirty();
+    wb.clear_cell(CellRef::new(0, 3, 3));
+    assert!(!wb.dirty());
+}
+
+#[test]
+fn value_at_reads_a_missing_cell_as_empty() {
+    // The contract the grid and the later formula engine both rely on.
+    let mut wb = Workbook::new();
+    assert_eq!(wb.value_at(CellRef::new(0, 7, 7)), CellValue::Empty);
+    wb.set_cell(CellRef::new(0, 7, 7), CellValue::Number(5.0));
+    assert_eq!(wb.value_at(CellRef::new(0, 7, 7)), CellValue::Number(5.0));
+}
+
+#[test]
+fn iter_cells_visits_every_cell_in_row_major_order() {
+    // The contract save and CSV export depend on.
+    let mut wb = Workbook::new();
+    wb.set_cell(CellRef::new(0, 2, 1), CellValue::Text("b".into()));
+    wb.set_cell(CellRef::new(0, 0, 3), CellValue::Text("a".into()));
+    wb.set_cell(CellRef::new(0, 1, 0), CellValue::Text("c".into()));
+    let coords: Vec<(u32, u32)> = wb.active().iter_cells().map(|(r, c, _)| (r, c)).collect();
+    assert_eq!(coords, vec![(0, 3), (1, 0), (2, 1)]);
+}
+
+#[test]
+fn replace_sheet_stamps_the_id_so_it_matches_its_index() {
+    let mut wb = Workbook::new();
+    wb.add_sheet("Two");
+    // A reader may hand back a sheet built with the wrong id; the workbook must not
+    // end up holding a sheet whose `id()` disagrees with its position.
+    let sheet = Sheet::new(99, "Loaded");
+    wb.replace_sheet(1, sheet);
+    assert_eq!(wb.sheet(1).id(), 1);
+}
+
+#[test]
 fn rows_iterate_in_column_order_and_skip_holes() {
     let mut wb = Workbook::new();
     wb.set_cell(CellRef::new(0, 0, 3), CellValue::Text("c".into()));
@@ -993,12 +1051,27 @@ use std::collections::BTreeMap;
 use super::cell::{Cell, CellRange, SheetId};
 
 /// One row of cells, keyed by column index.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Row {
     cells: BTreeMap<u32, Cell>,
+    /// Cached column bounds, kept in step with `cells`.
+    ///
+    /// Without these, recomputing a sheet's used range walks every populated cell in
+    /// the sheet rather than every row, which makes repeated single-cell clears
+    /// quadratic. `min_col`/`max_col` are O(1).
+    min_col: u32,
+    max_col: u32,
 }
 
 impl Row {
+    fn new() -> Self {
+        Self {
+            cells: BTreeMap::new(),
+            min_col: u32::MAX,
+            max_col: 0,
+        }
+    }
+
     pub fn get(&self, col: u32) -> Option<&Cell> {
         self.cells.get(&col)
     }
@@ -1008,11 +1081,25 @@ impl Row {
     }
 
     pub fn set(&mut self, col: u32, cell: Cell) {
+        if self.cells.is_empty() {
+            self.min_col = col;
+            self.max_col = col;
+        } else {
+            self.min_col = self.min_col.min(col);
+            self.max_col = self.max_col.max(col);
+        }
         self.cells.insert(col, cell);
     }
 
     pub fn remove(&mut self, col: u32) -> Option<Cell> {
-        self.cells.remove(&col)
+        let removed = self.cells.remove(&col)?;
+        if !self.cells.is_empty() && (col == self.min_col || col == self.max_col) {
+            // A boundary column was removed, so the cached bounds are stale. Rebuilding
+            // costs one pass over this row's keys, bounded by the row's width.
+            self.min_col = self.cells.keys().copied().min().unwrap_or(u32::MAX);
+            self.max_col = self.cells.keys().copied().max().unwrap_or(0);
+        }
+        Some(removed)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1024,11 +1111,11 @@ impl Row {
     }
 
     pub fn min_col(&self) -> u32 {
-        self.cells.keys().copied().min().unwrap_or(0)
+        self.min_col
     }
 
     pub fn max_col(&self) -> u32 {
-        self.cells.keys().copied().max().unwrap_or(0)
+        self.max_col
     }
 }
 
@@ -1058,6 +1145,10 @@ impl Sheet {
         self.name = name.into();
     }
 
+    pub fn set_id(&mut self, id: SheetId) {
+        self.id = id;
+    }
+
     pub fn get(&self, row: u32, col: u32) -> Option<&Cell> {
         self.rows.get(&row).and_then(|r| r.get(col))
     }
@@ -1072,11 +1163,16 @@ impl Sheet {
             Some(r) => r.union(&CellRange::new(row, col, row, col)),
             None => CellRange::new(row, col, row, col),
         });
-        self.rows.entry(row).or_default().set(col, cell);
+        self.rows.entry(row).or_insert_with(Row::new).set(col, cell);
     }
 
-    /// Remove a cell, shrinking the used range only if the removed cell was on
-    /// its boundary. An empty sheet reports `None` rather than a degenerate range.
+    /// Remove a cell and keep the used range correct.
+    ///
+    /// Removing an interior cell cannot change the bounding box, so that case returns
+    /// without touching it. Only a removal on the box's boundary triggers a rebuild,
+    /// and because [`Row`] caches its own column bounds the rebuild costs one pass over
+    /// the sheet's rows rather than over every populated cell. An emptied sheet reports
+    /// `None` rather than a degenerate range.
     pub fn remove(&mut self, row: u32, col: u32) -> Option<Cell> {
         let removed = {
             let row_entry = self.rows.get_mut(&row)?;
@@ -1087,26 +1183,31 @@ impl Sheet {
             removed
         }?;
 
-        if self.used.is_some() {
-            let mut min_row = u32::MAX;
-            let mut max_row = 0u32;
-            let mut min_col = u32::MAX;
-            let mut max_col = 0u32;
-            for (r, row_entry) in &self.rows {
-                if row_entry.is_empty() {
-                    continue;
-                }
-                min_row = min_row.min(*r);
-                max_row = max_row.max(*r);
-                min_col = min_col.min(row_entry.min_col());
-                max_col = max_col.max(row_entry.max_col());
-            }
-            self.used = if self.rows.is_empty() {
-                None
-            } else {
-                Some(CellRange { min_row, min_col, max_row, max_col })
-            };
+        let Some(used) = self.used else { return Some(removed) };
+        let touched_boundary = row == used.min_row
+            || row == used.max_row
+            || col == used.min_col
+            || col == used.max_col;
+        if !touched_boundary {
+            return Some(removed);
         }
+
+        if self.rows.is_empty() {
+            self.used = None;
+            return Some(removed);
+        }
+
+        let mut min_row = u32::MAX;
+        let mut max_row = 0u32;
+        let mut min_col = u32::MAX;
+        let mut max_col = 0u32;
+        for (r, row_entry) in &self.rows {
+            min_row = min_row.min(*r);
+            max_row = max_row.max(*r);
+            min_col = min_col.min(row_entry.min_col());
+            max_col = max_col.max(row_entry.max_col());
+        }
+        self.used = Some(CellRange { min_row, min_col, max_row, max_col });
         Some(removed)
     }
 
@@ -1288,12 +1389,15 @@ impl Workbook {
         self.dirty = true;
     }
 
+    /// Clear one cell. A no-op clear leaves the dirty flag alone, so pressing Delete on
+    /// an empty cell does not mark the workbook as needing a save.
     pub fn clear_cell(&mut self, at: CellRef) {
         if at.sheet >= self.sheets.len() {
             return;
         }
-        self.sheets[at.sheet].remove(at.row, at.col);
-        self.dirty = true;
+        if self.sheets[at.sheet].remove(at.row, at.col).is_some() {
+            self.dirty = true;
+        }
     }
 
     pub fn dirty(&self) -> bool {
@@ -1310,8 +1414,10 @@ impl Workbook {
 
     /// Load a sheet produced by a reader, replacing the workbook's contents.
     /// Used by file open in a later plan; defined here so the seam exists.
-    pub fn replace_sheet(&mut self, id: SheetId, sheet: Sheet) {
+    pub fn replace_sheet(&mut self, id: SheetId, mut sheet: Sheet) {
         if id < self.sheets.len() {
+            // Stamp the id so `Sheet::id()` can never disagree with the sheet's index.
+            sheet.set_id(id);
             self.sheets[id] = sheet;
             self.dirty = true;
         }
@@ -1336,7 +1442,7 @@ pub use workbook::Workbook;
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test --test workbook`
-Expected: 16 passed, 0 failed.
+Expected: 21 passed, 0 failed.
 
 - [ ] **Step 6: Lint and fix**
 
