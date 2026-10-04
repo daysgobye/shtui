@@ -2353,8 +2353,10 @@ pub fn click_to_selection(origin: Pos2, pos: Pos2, sheet: SheetId) -> Option<Cel
 pub fn visible_window(clip: Rect, origin: Pos2, rows: u32, cols: u32) -> VisibleWindow {
     let local_min = clip.min - origin;
     let local_max = clip.max - origin;
-    let row_of = |y: f32| (((y - HEADER_H) / ROW_H).floor() as i64).max(0);
-    let col_of = |x: f32| (((x - HEADER_W) / COL_W).floor() as i64).max(0);
+    // No header offset is subtracted here: content coordinates start at zero because
+    // the header gutters live outside the scroll area, not inside the content.
+    let row_of = |y: f32| ((y / ROW_H).floor() as i64).max(0);
+    let col_of = |x: f32| ((x / COL_W).floor() as i64).max(0);
     VisibleWindow {
         first_row: (row_of(local_min.y) - OVERSCAN).max(0) as u32,
         last_row: ((row_of(local_max.y) + OVERSCAN).max(0) as u32).min(rows),
