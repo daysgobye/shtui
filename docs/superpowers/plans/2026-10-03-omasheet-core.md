@@ -2447,26 +2447,28 @@ fn handle_key(
     true
 }
 
-/// Collect this frame's key-down events and text-input events.
-fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, Vec<String>, bool) {
+/// Collect this frame's key-down events and whether shift is held.
+///
+/// Text input is deliberately not collected: `Ui::input` takes `FnOnce(&InputState)`, so
+/// an owned text buffer would mean cloning every string, and nothing consumes one here
+/// yet. The task that adds editing reads `Event::Text` in its own `ui.input` call.
+fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, bool) {
     ui.input(|i| {
         let mut keys = Vec::new();
-        let mut text = Vec::new();
         for e in &i.events {
-            match e {
-                egui::Event::Key {
-                    key,
-                    pressed: true,
-                    repeat: false,
-                    ..
-                } => keys.push(*key),
-                // Cloned because the borrow ends with this closure; editing in a later
-                // task consumes it.
-                egui::Event::Text(t) => text.push(t.clone()),
-                _ => {}
+            // `repeat` stays filtered: key auto-repeat is a ledgered deferral, and
+            // dropping that filter here would change shipped behaviour in this round.
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                ..
+            } = e
+            {
+                keys.push(*key);
             }
         }
-        (keys, text, i.modifiers.shift)
+        (keys, i.modifiers.shift)
     })
 }
 
@@ -2490,7 +2492,7 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
     // An edit owns the caret; moving the selection underneath it would fight the edit.
     let mut handled = false;
     if state.edit.is_none() {
-        let (keys, _text_events, shift) = read_input(ui);
+        let (keys, shift) = read_input(ui);
         for k in &keys {
             if handle_key(state, wb, rows, cols, *k, shift) {
                 handled = true;
