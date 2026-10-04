@@ -195,13 +195,20 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
 
-    eframe::run_native(
-        "omasheet",
-        options,
-        Box::new(|_cc| Ok(Box::new(omasheet::app::app::OmaApp::default()))),
-    )
+    // `OmaApp` is still a unit struct, so clippy suggests the literal `OmaApp` instead of
+    // `OmaApp::default()`. Later tasks give it fields; constructing through `Default` keeps
+    // this call site correct across that change, so silence the lint here.
+    #[allow(clippy::default_constructed_unit_structs)]
+    let app = omasheet::app::app::OmaApp::default();
+
+    eframe::run_native("omasheet", options, Box::new(|_cc| Ok(Box::new(app))))
 }
 ```
+
+The `#[allow]` is temporary debt with a silent expiry: once `OmaApp` has fields the lint
+stops applying, and a stale `allow` naming a real lint is not itself warned about. **Task 4
+deletes the attribute and its comment** in the same commit that gives `OmaApp` its first
+field.
 
 - [ ] **Step 6: Build and confirm it compiles**
 
@@ -221,9 +228,13 @@ Expected: exit code 124 (the `timeout` killed a still-running app) and a window 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add Cargo.toml .gitignore src
+git add Cargo.toml .gitignore Cargo.lock src
 git commit -m "feat: crate skeleton and eframe window"
 ```
+
+`Cargo.lock` is committed deliberately. The `=` pins constrain only the two direct
+dependencies; `wgpu`, `naga`, `winit` and the rest float. Without the lock, a fresh resolve
+on another day can break the build on the MSRV ceiling this project is pinned below.
 
 ---
 
@@ -1325,6 +1336,10 @@ git commit -m "feat: sparse sheet storage and workbook container"
 **Files:**
 - Create: `src/io/csv_read.rs` (replace placeholder)
 - Create: `tests/csv_read.rs`
+- Modify: `src/app/app.rs`
+- Modify: `src/main.rs` (delete the temporary `#[allow(clippy::default_constructed_unit_structs)]`
+  and its comment — `OmaApp` gains fields here, so the lint no longer applies and the
+  suppression becomes inert debt)
 
 **Interfaces:**
 - Consumes: `Sheet`, `Cell`, `CellValue` from Tasks 2–3.
