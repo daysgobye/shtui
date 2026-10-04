@@ -419,7 +419,8 @@ away.
 - The selection cannot be moved outside the scrollable extent, so the highlight is always
   reachable. **Keeping it scrolled into view is deferred**: the selection may sit off-screen
   until the user scrolls, rather than the view following the selection automatically.
-- Per-column width overrides; autosize on double-clicking a header edge.
+- Uniform default column width, with per-column overrides; autosize on double-clicking
+  a header edge.
 - Editing happens in-cell, overlaid on the grid. The formula bar mirrors the active
   cell's input; typing in either works.
 
