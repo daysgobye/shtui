@@ -426,6 +426,32 @@ fn a_pasted_tab_never_reaches_a_cell_value() {
     assert_eq!(h.value(A1), CellValue::Text("xab".to_owned()));
 }
 
+/// `Shift+Tab` is the shifted pair of the key the app claims, and it is claimed for the same
+/// reason: it must not edit the buffer. This is the test the old claim in `grid_keys.rs`
+/// pointed at and could not be — it needs the field, because the field is both the thing
+/// holding the keyboard and the only widget here that could dedent a line.
+///
+/// Two indented lines, so a dedent has somewhere to happen.
+#[test]
+fn shift_tab_neither_dedents_the_line_nor_moves_the_selection() {
+    let mut h = Bar::new();
+    h.pass(type_text("one"));
+    h.pass_with(key_with(Key::Enter, shift()), shift());
+    h.pass(type_text("    two"));
+    let cell = h.app.grid.selection.active;
+
+    h.pass_with(key_with(Key::Tab, shift()), shift());
+    assert_eq!(
+        h.field(),
+        "one\n    two",
+        "the buffer must come through Shift+Tab byte-identical: the widget does not get it"
+    );
+    assert_eq!(
+        h.app.grid.selection.active, cell,
+        "Shift+Tab moved the selection: `shift` is what stops it counting as `Tab`"
+    );
+}
+
 /// A cell cleared from the bar shows as an empty field, not as the text `Empty`.
 #[test]
 fn emptying_the_field_clears_the_cell_rather_than_storing_an_empty_one() {

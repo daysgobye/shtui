@@ -21,9 +21,17 @@
 //!   already known. Requesting focus before laying the field out is therefore what keeps
 //!   the keystroke that asked for focus from being swallowed — the alternative loses the
 //!   first character of every edit.
-//! - A focus request carries egui's *default* event filter, which does not claim the
-//!   arrow keys, and no widget can replace it until it has held focus for a frame. See
-//!   [`FIELD_FILTER`] for what that costs and what closes it.
+//! - A focus request carries egui's *default* event filter, which surrenders on the arrow
+//!   keys, and [`eframe::egui::Memory::set_focus_lock_filter`] will not install another
+//!   until the field has held focus on an earlier frame. `TextEdit::multiline` asks for
+//!   one that claims the arrow keys — but not `Tab`, which has to reach the field as a
+//!   gesture *not* to edit so the app can read it as "next cell", nor `Esc`, which has to
+//!   reach egui to surrender the keyboard at all — and installs it as soon as that is
+//!   allowed. So for the frame a focus request lands on, and for the frame after every
+//!   `Tab`, the field is focused but unclaimed, and an arrow pressed in that frame is
+//!   read as a `FocusDirection` at the top of the frame and given to whatever widget egui
+//!   finds that way. Nothing here has to close that window by hand: the grid is not a
+//!   focusable widget, so the search has nothing to find. `tests/formula_bar.rs` pins it.
 //!
 //! A multiline `TextEdit` grows to fit its content and *cannot* be shrunk: `desired_rows`
 //! and `add_sized` both set a minimum, not a maximum. The cap therefore comes from an
@@ -32,8 +40,7 @@
 use std::borrow::Cow;
 
 use eframe::egui::{
-    EventFilter, Id, Key, KeyboardShortcut, Label, Modifiers, Rect, ScrollArea, TextEdit, Ui,
-    UiBuilder, pos2,
+    Id, Key, KeyboardShortcut, Label, Modifiers, Rect, ScrollArea, TextEdit, Ui, UiBuilder, pos2,
 };
 
 use crate::ui::grid::{self, HEADER_W};
@@ -44,36 +51,15 @@ use crate::workbook::cell::{CellRef, CellValue, format_a1};
 /// a four-point margin, so this leaves the field a little air.
 pub const MIN_BAR_H: f32 = 24.0;
 
-/// The share of the window the bar may take however long the value is. Past this the field
-/// scrolls: a long Lua chunk has to stay readable without eating the grid.
+/// The share of the panel the bar shares with the grid that the bar may take however long
+/// the value is. Past this the field scrolls: a long Lua chunk has to stay readable without
+/// eating the grid.
 pub const MAX_BAR_FRACTION: f32 = 0.4;
 
 /// Identifies the field across frames. egui derives ids from the `Ui` that owns the
 /// widget, not from its rect, so the field keeps its keyboard when the bar changes height
 /// — but only if both this salt and the child `Ui` below are fixed.
 const FIELD_SALT: &str = "omasheet-formula-bar-field";
-
-/// Which keys the field keeps rather than letting egui move focus with.
-///
-/// Arrows claimed, `Tab` and `Esc` not: the arrow keys move the caret within the value,
-/// while `Tab` has to reach the field as a gesture *not* to edit so the app can read it as
-/// "next cell", and `Esc` has to reach egui to surrender the keyboard at all.
-///
-/// This is the same filter `TextEdit::multiline` asks for, restated here because of *when*
-/// it has to be in place. `TextEdit` will install one only once the field has held focus on
-/// an earlier frame, but [`Memory::request_focus`] hands focus over with egui's default,
-/// which surrenders on arrows. So for one frame after every focus request — and after every
-/// `Tab`, which surrenders by design — the field is focused but unclaimed, and an arrow
-/// pressed in that frame is read as a `FocusDirection` at the top of the frame and given to
-/// whatever widget egui finds that way. Installing it here on every frame closes that
-/// window from the second frame onwards; the first is closed the other way round, by the
-/// grid not being a focusable widget, so that search has nothing to find.
-const FIELD_FILTER: EventFilter = EventFilter {
-    horizontal_arrows: true,
-    vertical_arrows: true,
-    tab: false,
-    escape: false,
-};
 
 /// Which way `Enter` or `Tab` asked the selection to move.
 ///
@@ -176,7 +162,7 @@ impl FormulaBar {
 
     /// The height the bar reserves in the layout.
     ///
-    /// `show` clamps this against the window, so the value is one frame stale after a
+    /// `show` clamps this against the panel, so the value is one frame stale after a
     /// paste long enough to reach the cap: the layout hands the grid the taller of the two
     /// for that frame and the bar draws short. Not observable.
     pub fn min_height(&self) -> f32 {
@@ -240,15 +226,6 @@ pub fn show(
     // keystroke only moves the selection if the field owned the keyboard when it arrived.
     let owned_input = bar.focused(ui);
     let cap = (panel.height() * MAX_BAR_FRACTION).max(MIN_BAR_H);
-
-    // Unconditional, and before anything else touches focus. `TextEdit` will not install a
-    // filter of its own until the field has held focus on an earlier frame, and the frame
-    // a focus request lands is precisely the frame where that is untrue, so this is the
-    // only place one can be installed early enough to matter. A no-op on every other
-    // frame, including the one that is too late to help.
-    if let Some(id) = bar.id {
-        ui.memory_mut(|m| m.set_focus_lock_filter(id, FIELD_FILTER));
-    }
 
     // Read before anything is applied: egui drops the keyboard on `Esc` before layout
     // runs, so this reports what the user pressed, not what the field now owns.
