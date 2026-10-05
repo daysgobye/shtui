@@ -349,7 +349,7 @@ readable. It grows up to a cap and scrolls past it, rather than eating the windo
 | `Enter` | Move down |
 | `Shift+Enter` | Insert a newline |
 | `Tab` | Move right |
-| `Shift+Tab` | **Not wired.** Claimed by the app so egui cannot dedent; inert |
+| `Shift+Tab` | **Not wired.** egui's multiline filter excludes `Tab` from the widget entirely, so it never reaches the field; the app does not handle it either. Inert |
 | `Esc` | Restore the pre-edit snapshot, drop focus |
 
 Moving up is the up arrow. `Shift+Enter` no longer commits and moves up: a multi-line field
@@ -477,7 +477,9 @@ format the model should not carry.
 work. The table above describes the finished application, not this slice. `Shift+Tab` is the
 one that needs a ruling: §6.1 once promised it as a newline, but a newline at the caret needs
 caret access the bar does not own, and `return_key` accepts only one chord per key. It is
-inert for now rather than pretending otherwise.
+inert for now rather than pretending otherwise. Note that nothing has to *claim* it: egui's
+multiline `TextEdit` filters the `Tab` key out of its own event list, so `Tab` and `Shift+Tab`
+reach only the app. The app uses `Tab` to move right and ignores the shifted form.
 
 ---
 
