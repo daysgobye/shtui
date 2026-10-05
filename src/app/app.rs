@@ -74,12 +74,10 @@ impl OmaApp {
         // Before anything reads the selection this frame, including the grid's own
         // navigation and painting. See `retarget_selection_to_active_sheet`.
         self.retarget_selection_to_active_sheet();
-        ui.horizontal(|ui| {
-            ui.heading("Omasheet");
-            if self.wb.dirty() {
-                ui.label("modified");
-            }
-        });
+        // No title strip. "Omasheet" said nothing the window manager does not already say,
+        // and a heading costs a row of vertical space the grid could use. The modified
+        // marker lives in the formula bar's name box instead, which is where a spreadsheet
+        // keeps it and where it sits next to the address it refers to.
         if let Some(err) = &self.error {
             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
         }
@@ -113,10 +111,14 @@ impl OmaApp {
                 .max_rect(bar_rect)
                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
         );
+        // Read before the borrow, not inline in the call: `show` takes `&mut wb` and
+        // `dirty` reads it.
+        let dirty = self.wb.dirty();
         formula_bar::show(
             &mut self.bar,
             &mut self.wb,
             self.grid.selection.active,
+            dirty,
             &mut bar_ui,
         );
 

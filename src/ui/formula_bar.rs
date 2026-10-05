@@ -186,7 +186,7 @@ fn cell_text(text: &str) -> Cow<'_, str> {
 }
 
 /// Draw the bar and apply everything the user did in it.
-pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, ui: &mut Ui) {
+pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, dirty: bool, ui: &mut Ui) {
     // An untouched field is a mirror of the model, so a change made anywhere else — a
     // `Delete` on the grid, a file opened over the top — has to reach it. Once the user
     // has typed, it is theirs: reloading over a half-typed value would throw it away,
@@ -237,11 +237,15 @@ pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, ui: &mut U
     let text = &mut bar.text;
     ui.horizontal_top(|ui| {
         // The name box is as wide as the row-number gutter, so the two line up down the
-        // left edge of the window.
-        ui.add_sized(
-            [HEADER_W, MIN_BAR_H],
-            Label::new(format_a1(target.row, target.col)),
-        );
+        // left edge of the window. The modified marker rides with the address rather
+        // than living in a title strip: it says *this* cell's sheet has unsaved
+        // changes, and it is next to the address it refers to.
+        let name = if dirty {
+            format!("{} \u{25cf}", format_a1(target.row, target.col))
+        } else {
+            format_a1(target.row, target.col)
+        };
+        ui.add_sized([HEADER_W, MIN_BAR_H], Label::new(name));
         let rect = ui.available_rect_before_wrap();
         let mut field_ui = ui.new_child(
             UiBuilder::new()

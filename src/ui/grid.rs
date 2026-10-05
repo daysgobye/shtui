@@ -31,6 +31,13 @@ pub const HEADER_H: f32 = 24.0;
 /// Extra rows and columns painted beyond the viewport, so scrolling shows no gaps.
 pub const OVERSCAN: i64 = 2;
 
+/// How strongly the zebra stripe tints towards the text colour.
+const STRIPE_STRENGTH: f32 = 0.06;
+
+/// How strongly a grid line tints towards the text colour. Three times the stripe, so
+/// the two never read as the same edge.
+const GRID_STRENGTH: f32 = 0.18;
+
 /// Minimum scrollable extent, so an empty sheet still scrolls.
 const MIN_ROWS: u32 = 200;
 const MIN_COLS: u32 = 26;
@@ -455,7 +462,13 @@ fn paint_body(
     rows: u32,
     cols: u32,
 ) {
-    let grid_line = visuals.widgets.noninteractive.bg_stroke.color;
+    // The zebra stripe and the grid lines were each borrowed from a different theme slot,
+    // and in egui's own palette those two greys sit close enough together that the stripe
+    // and the lines read as one blur. Deriving both from the text colour at a fixed
+    // fraction makes the relationship explicit — the line is three times the stripe's
+    // strength — and holds in light and dark alike, rather than only in this theme.
+    let stripe_colour = visuals.text_color().gamma_multiply(STRIPE_STRENGTH);
+    let grid_line = visuals.text_color().gamma_multiply(GRID_STRENGTH);
     // The sheet comes from the workbook, not from the selection: after a sheet switch
     // the selection can still name the old sheet for a frame.
     let sheet_id = wb.active_id();
@@ -478,7 +491,7 @@ fn paint_body(
                     Color32::from_rgba_unmultiplied(colour.r, colour.g, colour.b, colour.a)
                 }
                 None if in_selection && !is_active => visuals.selection.bg_fill,
-                None if row % 2 == 1 => visuals.widgets.inactive.weak_bg_fill,
+                None if row % 2 == 1 => stripe_colour,
                 None => Color32::TRANSPARENT,
             };
             if bg != Color32::TRANSPARENT {
