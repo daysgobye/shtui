@@ -349,7 +349,7 @@ readable. It grows up to a cap and scrolls past it, rather than eating the windo
 | `Enter` | Move down |
 | `Shift+Enter` | Insert a newline |
 | `Tab` | Move right |
-| `Shift+Tab` | Insert a newline (`Tab` is claimed before `Shift+Tab` can dedent) |
+| `Shift+Tab` | **Not wired.** Claimed by the app so egui cannot dedent; inert |
 | `Esc` | Restore the pre-edit snapshot, drop focus |
 
 Moving up is the up arrow. `Shift+Enter` no longer commits and moves up: a multi-line field
@@ -397,10 +397,6 @@ formatting. Internal copy/paste is the lossless path.
 
 ```
 ┌──────────────────────────────────────────────┐
-│ rentals.csv                             ●    │
-├──────────────────────────────────────────────┤
-│ General │ Number │ Money │ % │ Text │ A ▾ │ B ▾│  ← collapsible, Ctrl+Shift+R
-├──────────────────────────────────────────────┤
 │ Sheet1 │ Sheet2 │ +                          │
 ├──────────────────────────────────────────────┤
 │    │ A     │ B       │ C                   │
@@ -408,9 +404,14 @@ formatting. Internal copy/paste is the lossless path.
 │  2 │ Rent  │ 1200    │ 3600                │
 │  … │  …    │  …      │  …    ← grid        │
 ├──────────────────────────────────────────────┤
-│ A1 │ fx │ =VALUE*3                           │  ← formula bar
+│ A1 ● │ =VALUE*3                             │  ← formula bar, grows with its content
 └──────────────────────────────────────────────┘
 ```
+
+No title strip and no ribbon in this slice: the ribbon arrives with the formatting UI, and a
+heading that says only "Omasheet" costs a row of grid height to say nothing the window manager
+does not already say. The modified marker rides in the formula bar's name box, next to the
+address it refers to.
 
 The ribbon departs from the original Omawrite-inspired sketch, which specified no ribbon.
 It is implemented as **collapsible and collapsed by default**: the toggle is
@@ -431,8 +432,8 @@ away.
   until the user scrolls, rather than the view following the selection automatically.
 - Uniform default column width, with per-column overrides; autosize on double-clicking
   a header edge.
-- Editing happens in-cell, overlaid on the grid. The formula bar mirrors the active
-  cell's input; typing in either works.
+- Editing happens in the formula bar, which is the only input surface. Typing on the grid,
+  `F2` and double-click all focus it rather than opening an in-cell editor — see §6.1.
 
 ### 7.2 Ribbon
 
@@ -456,9 +457,9 @@ format the model should not carry.
 | `Ctrl+Home` / `Ctrl+End` | Corners of the used range |
 | `PageUp` / `PageDown` | Move by viewport |
 | `Delete` / `Backspace` | Clear contents |
-| `F2` | Edit in cell |
-| `Enter` / `Shift+Enter` / `Tab` / `Shift+Tab` | Commit and move |
-| `Esc` | Cancel edit |
+| `F2` | Focus the formula bar, seeded with the cell |
+| `Enter` / `Tab` | Move down / right; the cell is already written |
+| `Esc` | Restore the pre-edit snapshot and drop focus |
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Clipboard |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `Ctrl+D` / `Ctrl+R` | Fill down / fill right |
@@ -469,10 +470,13 @@ format the model should not carry.
 | `Ctrl+Shift+R` | Toggle ribbon |
 
 **Built in the first core slice:** arrows, `Shift`+arrows, `Home` (column only),
-`Delete`, `Backspace`, `F2`, `Enter`, `Shift+Enter`, `Tab`, `Shift+Tab`, `Esc`.
-**Not yet built:** every `Ctrl` binding, `PageUp`/`PageDown`, `Ctrl+Arrow`, and
-`Ctrl+Home`/`End` — these arrive with the formula, clipboard, and sheet-tab work. The
-table above describes the finished application, not this slice.
+`Delete`, `Backspace`, `F2`, `Enter`, `Tab`, `Shift+Enter`, `Esc`.
+**Not yet built:** every `Ctrl` binding, `PageUp`/`PageDown`, `Ctrl+Arrow`,
+`Ctrl+Home`/`End`, and `Shift+Tab` — these arrive with the formula, clipboard, and sheet-tab
+work. The table above describes the finished application, not this slice. `Shift+Tab` is the
+one that needs a ruling: §6.1 once promised it as a newline, but a newline at the caret needs
+caret access the bar does not own, and `return_key` accepts only one chord per key. It is
+inert for now rather than pretending otherwise.
 
 ---
 
