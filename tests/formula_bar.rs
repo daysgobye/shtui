@@ -387,6 +387,10 @@ fn a_multi_line_value_grows_the_bar() {
 #[test]
 fn the_bar_grows_to_its_cap_and_no_further() {
     let mut h = Bar::new();
+    // The cap is a share of the panel the bar shares with the grid, which fills the window
+    // today. Deriving it from the window here is the same number only for as long as that
+    // is true — and if it stops being, the half-point assertion below says so rather than
+    // quietly measuring the wrong thing.
     let cap = MAX_BAR_FRACTION * screen().height();
     h.pass(type_text("x"));
     for _ in 0..40 {

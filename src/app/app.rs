@@ -112,13 +112,17 @@ impl OmaApp {
                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
         );
         // Read before the borrow, not inline in the call: `show` takes `&mut wb` and
-        // `dirty` reads it.
+        // `dirty` reads it. `full` is passed as well as read here because the bar's cap is
+        // a share of this rect, not of the window: `bar_top` above is derived from it, so
+        // a cap measured from anywhere taller could outgrow the panel and leave the grid
+        // no height.
         let dirty = self.wb.dirty();
         formula_bar::show(
             &mut self.bar,
             &mut self.wb,
             self.grid.selection.active,
             dirty,
+            full,
             &mut bar_ui,
         );
 

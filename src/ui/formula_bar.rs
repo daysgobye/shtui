@@ -212,7 +212,19 @@ fn cell_text(text: &str) -> Cow<'_, str> {
 }
 
 /// Draw the bar and apply everything the user did in it.
-pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, dirty: bool, ui: &mut Ui) {
+///
+/// `panel` is the rect [`crate::app::app::OmaApp::body`] split between the grid and the
+/// bar, and it is the cap's only correct source: the app derives `bar_top` from that same
+/// rect, so a cap measured against anything taller — the window, the viewport — would
+/// eventually hand the bar the whole panel and leave the grid no height at all.
+pub fn show(
+    bar: &mut FormulaBar,
+    wb: &mut Workbook,
+    target: CellRef,
+    dirty: bool,
+    panel: Rect,
+    ui: &mut Ui,
+) {
     // An untouched field is a mirror of the model, so a change made anywhere else — a
     // `Delete` on the grid, a file opened over the top — has to reach it. Once the user
     // has typed, it is theirs: reloading over a half-typed value would throw it away,
@@ -227,7 +239,7 @@ pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, dirty: boo
     // Taken before the field is laid out, because `Enter` and `Tab` are read after it: a
     // keystroke only moves the selection if the field owned the keyboard when it arrived.
     let owned_input = bar.focused(ui);
-    let cap = (ui.ctx().input(|i| i.viewport_rect().height()) * MAX_BAR_FRACTION).max(MIN_BAR_H);
+    let cap = (panel.height() * MAX_BAR_FRACTION).max(MIN_BAR_H);
 
     // Unconditional, and before anything else touches focus. `TextEdit` will not install a
     // filter of its own until the field has held focus on an earlier frame, and the frame
