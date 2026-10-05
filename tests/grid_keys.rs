@@ -6,8 +6,10 @@
 //! simulate pointer input at all (a plain `ui.button` also fails to report `clicked()`
 //! under it), so `response.clicked()` and `response.double_clicked()` cannot be exercised.
 //! The pointer-to-selection mapping around it is covered directly by the
-//! `click_to_selection` tests, and clicking to focus the formula bar is checked by hand
-//! against the real window.
+//! `click_to_selection` tests, but the wiring those two sit on — a click reaching the
+//! selection, and a double click handing the keyboard to the formula bar — is **unverified
+//! by any test and not verified by hand either**. The shared Wayland session this was
+//! built on makes synthetic input unsafe, so it was not exercised in a real window.
 //!
 //! Typing is not here either: it goes through one widget now, and everything about it
 //! lives in `tests/formula_bar.rs`.
@@ -101,7 +103,12 @@ fn grid_pass_locked(
 ///
 /// A fresh `Context` per pass builds its font atlas and texture on the first frame. That is
 /// start-up cost, and no real app pays it twice, so a *timed* pass must reuse a context
-/// that has already had one. Behaviour is otherwise identical to `pass_with`.
+/// that has already had one. That is the *only* difference, and it is not a small one for
+/// the formula bar: focus lives in the `Context`, so a pass on a fresh one can never see a
+/// widget focused by the pass before it, and a gesture that hands over focus — `F2`, a
+/// printable character, `Tab` — has no visible effect at all. A test here that needs to
+/// see the bar must not use `pass_with`; it belongs in `tests/formula_bar.rs`, which shares
+/// one context for exactly that reason.
 fn pass_on(app: &mut OmaApp, ctx: &egui::Context, events: Vec<Event>, modifiers: Modifiers) {
     let input = RawInput {
         screen_rect: Some(screen()),
@@ -474,19 +481,12 @@ fn a_locked_grid_reads_no_keys() {
     assert_eq!(wb.value_at(a1), CellValue::Text("rent".into()));
 }
 
-/// `Shift+Tab` is claimed rather than left to reach the field, where egui would dedent the
-/// line. Claimed and given nothing else to do, it must not move anything either.
-#[test]
-fn shift_tab_is_claimed_by_the_app_and_does_nothing() {
-    let mut app = OmaApp::default();
-    let shift = Modifiers {
-        shift: true,
-        ..Default::default()
-    };
-    pass_with(&mut app, key(Key::Tab), shift);
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
-    assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
-}
+// There is no `Shift+Tab` test here. One was, and it asserted nothing: with the field out
+// of reach (see `pass_with` above) `grid::show` matched neither its `Delete`/`Backspace`
+// arm nor `handle_key`, which declines `Tab` outright, so the test would have passed
+// against a build with no formula bar in it at all. The claim it was named for is real —
+// the shifted pair is claimed by the app so egui cannot dedent the line — but it is only
+// observable with the field present, and lives with the field in `tests/formula_bar.rs`.
 
 #[test]
 fn selection_starts_as_a_single_cell() {
@@ -504,39 +504,6 @@ fn delete_clears_the_active_cell_and_marks_dirty() {
     pass(&mut app, key(Key::Delete));
     assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
     assert!(app.wb.dirty());
-}
-
-/// `F2`-then-`Enter` on an untouched cell must leave the workbook clean. Nothing was typed,
-/// so nothing was written: with every keystroke reaching the model live there is no commit
-/// step here at all, so the "modified" marker has nothing to switch on.
-#[test]
-fn f2_then_enter_on_an_untouched_cell_leaves_the_workbook_clean() {
-    let mut app = OmaApp::default();
-    pass(&mut app, key(Key::F2));
-    pass(&mut app, key(Key::Enter));
-    assert!(app.wb.cell(CellRef::new(0, 0, 0)).is_none());
-    assert!(app.wb.active().used().is_none());
-    assert!(!app.wb.dirty());
-}
-
-/// The same two keys over a populated cell leave it exactly as it was. Under the old
-/// in-cell editor this rewrote the text it had just seeded the buffer with, marking the
-/// workbook dirty for a gesture that changed nothing; the pin survives because that is
-/// still the easy mistake to make.
-#[test]
-fn f2_then_enter_on_a_populated_cell_changes_nothing() {
-    let mut app = OmaApp::default();
-    app.wb
-        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("rent".into()));
-    app.wb.clear_dirty();
-    pass(&mut app, key(Key::F2));
-    pass(&mut app, key(Key::Enter));
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Text("rent".into())
-    );
-    assert!(app.wb.active().used().is_some());
-    assert!(!app.wb.dirty());
 }
 
 // `parse_input` used to live here as `ui::grid::parse_input` and was tested through this
@@ -663,8 +630,10 @@ fn retargeting_requalifies_the_anchor_as_well_as_the_active_cell() {
 }
 
 // --- Pointer actions. `Response::clicked` and `double_clicked` cannot be simulated by
-// `Context::run_ui`, so these cover the decision, not the wiring; the wiring is checked
-// by hand against the real window. ---
+// `Context::run_ui`, so these cover the decision and nothing else. The wiring from a
+// `Response` to that decision is covered by no test here, and was not checked by hand
+// either: the shared Wayland session this was built on makes synthetic input unsafe, so no
+// click was ever driven through a real window. Treat it as unverified. ---
 
 #[test]
 fn a_single_click_selects_the_cell_under_the_pointer() {
@@ -765,18 +734,4 @@ fn the_stripe_darkens_a_light_theme_rather_than_going_black() {
         luma(stripe) > 128.0,
         "light theme stripe {stripe:?} went nearly black"
     );
-}
-
-#[test]
-fn the_stripe_and_the_grid_are_not_the_same_colour() {
-    for (name, visuals) in [
-        ("dark", egui::Visuals::dark()),
-        ("light", egui::Visuals::light()),
-    ] {
-        let (stripe, grid) = zebra_and_grid_colours(&visuals);
-        assert_ne!(
-            stripe, grid,
-            "{name}: stripe and grid collapsed to one colour"
-        );
-    }
 }

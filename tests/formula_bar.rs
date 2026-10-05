@@ -8,7 +8,9 @@
 //! of the process — so this is the real arrangement rather than a test-only fiction.
 //!
 //! The pointer is the exception, as everywhere in this repo: `Context::run_ui` does not
-//! simulate clicks, so "clicking a cell focuses the bar" is hand-verified only.
+//! simulate clicks. "Clicking a cell selects it and focuses the bar" is therefore covered
+//! by no test here, and was not verified by hand either — the shared Wayland session this
+//! was built on makes synthetic input unsafe. Treat it as unverified.
 
 use egui::{Event, Key, Modifiers, RawInput, Rect, Vec2, pos2, vec2};
 use omasheet::app::app::OmaApp;
@@ -503,4 +505,39 @@ fn an_arrow_key_does_not_take_the_keyboard_out_of_the_field() {
     // caret moved instead: two `ArrowUp`s put it at the front of the value.
     h.pass(type_text("x"));
     assert_eq!(h.field(), "xa");
+}
+
+/// `F2`-then-`Enter` on an untouched cell must leave the workbook clean. Nothing was typed,
+/// so nothing was written: with every keystroke reaching the model live there is no commit
+/// step here at all, so the "modified" marker has nothing to switch on.
+///
+/// These two live here rather than in `tests/grid_keys.rs`, where they started, because the
+/// field is what they are about. `F2` is only visible as a gesture when focus survives into
+/// the next frame, and focus lives in the `Context` — a per-pass context, which is what
+/// `tests/grid_keys.rs` drives the app with, throws that away.
+#[test]
+fn f2_then_enter_on_an_untouched_cell_leaves_the_workbook_clean() {
+    let mut h = Bar::new();
+    h.pass(key(Key::F2));
+    h.pass(key(Key::Enter));
+    assert!(h.app.wb.cell(A1).is_none());
+    assert!(h.app.wb.active().used().is_none());
+    assert!(!h.app.wb.dirty());
+}
+
+/// The same two keys over a populated cell leave it exactly as it was. Under the old
+/// in-cell editor this rewrote the text it had just seeded the buffer with, marking the
+/// workbook dirty for a gesture that changed nothing; the pin survives because that is
+/// still the easy mistake to make.
+#[test]
+fn f2_then_enter_on_a_populated_cell_changes_nothing() {
+    let mut h = Bar::new();
+    h.app.wb.set_cell(A1, CellValue::Text("rent".to_owned()));
+    h.pass(Vec::new());
+    h.app.wb.clear_dirty();
+    h.pass(key(Key::F2));
+    h.pass(key(Key::Enter));
+    assert_eq!(h.value(A1), CellValue::Text("rent".to_owned()));
+    assert!(h.app.wb.active().used().is_some());
+    assert!(!h.app.wb.dirty());
 }

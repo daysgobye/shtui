@@ -285,8 +285,10 @@ pub fn show(
     ui.horizontal_top(|ui| {
         // The name box is as wide as the row-number gutter, so the two line up down the
         // left edge of the window. The modified marker rides with the address rather
-        // than living in a title strip: it says *this* cell's sheet has unsaved
-        // changes, and it is next to the address it refers to.
+        // than living in a title strip: the address is the thing a user is looking at when
+        // they ask whether their work is saved, and the marker is next to it. What it
+        // reports is `Workbook::dirty`, which is workbook-wide — a change on any sheet
+        // marks every sheet's bar — so it is a marker for the file, not for the cell.
         let name = if dirty {
             format!("{} \u{25cf}", format_a1(target.row, target.col))
         } else {
