@@ -714,3 +714,69 @@ fn a_click_outside_the_body_selects_nothing() {
         CellAction::None
     );
 }
+
+/// Perceived brightness, 0-255. Good enough to compare two greys with each other.
+fn luma(c: egui::Color32) -> f32 {
+    0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32
+}
+
+#[test]
+fn the_zebra_stripe_is_visible_against_the_row_beneath_it() {
+    for (name, visuals) in [
+        ("dark", egui::Visuals::dark()),
+        ("light", egui::Visuals::light()),
+    ] {
+        let (stripe, _) = zebra_and_grid_colours(&visuals);
+        let base = visuals.panel_fill;
+        // Absolute difference, not "brighter": the stripe moves towards the text colour,
+        // which means it darkens a light theme and lightens a dark one.
+        let lift = (luma(stripe) - luma(base)).abs();
+        assert!(
+            lift >= 4.0,
+            "{name}: stripe {stripe:?} is only {lift:.1} from the row beneath it {base:?}"
+        );
+    }
+}
+
+#[test]
+fn grid_lines_are_clearly_stronger_than_the_zebra_stripe() {
+    for (name, visuals) in [
+        ("dark", egui::Visuals::dark()),
+        ("light", egui::Visuals::light()),
+    ] {
+        let (stripe, grid) = zebra_and_grid_colours(&visuals);
+        let gap = (luma(grid) - luma(stripe)).abs();
+        // This is the pair the original complaint was about: borrowed from two unrelated
+        // theme slots that happened to be the same grey.
+        assert!(
+            gap >= 6.0,
+            "{name}: grid {grid:?} is only {gap:.1} from the stripe {stripe:?}"
+        );
+    }
+}
+
+#[test]
+fn the_stripe_darkens_a_light_theme_rather_than_going_black() {
+    // Regression guard. Deriving the stripe from `text_color` alone, which is what this
+    // did first, gives near-black on a white background.
+    let visuals = egui::Visuals::light();
+    let (stripe, _) = zebra_and_grid_colours(&visuals);
+    assert!(
+        luma(stripe) > 128.0,
+        "light theme stripe {stripe:?} went nearly black"
+    );
+}
+
+#[test]
+fn the_stripe_and_the_grid_are_not_the_same_colour() {
+    for (name, visuals) in [
+        ("dark", egui::Visuals::dark()),
+        ("light", egui::Visuals::light()),
+    ] {
+        let (stripe, grid) = zebra_and_grid_colours(&visuals);
+        assert_ne!(
+            stripe, grid,
+            "{name}: stripe and grid collapsed to one colour"
+        );
+    }
+}

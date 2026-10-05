@@ -31,12 +31,14 @@ pub const HEADER_H: f32 = 24.0;
 /// Extra rows and columns painted beyond the viewport, so scrolling shows no gaps.
 pub const OVERSCAN: i64 = 2;
 
-/// How strongly the zebra stripe tints towards the text colour.
-const STRIPE_STRENGTH: f32 = 0.06;
+/// How far the zebra stripe moves from the background towards the text colour.
+///
+/// Enough to carry the eye across a row without the stripe becoming a band of its own.
+const STRIPE_STRENGTH: f32 = 0.055;
 
-/// How strongly a grid line tints towards the text colour. Three times the stripe, so
-/// the two never read as the same edge.
-const GRID_STRENGTH: f32 = 0.18;
+/// How far a grid line moves the same way. Kept clearly above the stripe so a striped
+/// row never reads as one thick edge.
+const GRID_STRENGTH: f32 = 0.16;
 
 /// Minimum scrollable extent, so an empty sheet still scrolls.
 const MIN_ROWS: u32 = 200;
@@ -130,7 +132,33 @@ pub fn step_active(state: &mut GridState, wb: &Workbook, step: Step) {
     state.selection.anchor = next;
 }
 
-/// The top-left of cell `(row, col)` in grid content coordinates.
+/// Linear blend of two opaque colours. `t` of 0 returns `a`, 1 returns `b`.
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let channel = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(
+        channel(a.r(), b.r()),
+        channel(a.g(), b.g()),
+        channel(a.b(), b.b()),
+    )
+}
+
+/// The zebra stripe and grid line colours for a theme.
+///
+/// Both are the background moved a *fixed fraction towards the text colour*, so the
+/// stripe darkens a light theme and lightens a dark one — always away from the
+/// background, never towards black. Deriving them from the text colour alone, which is
+/// what this did first, produces a near-black stripe on a white background.
+///
+/// Exposed so the relationship can be asserted without a window: separability in *any*
+/// theme is the claim, and it is worth testing rather than eyeballing on one machine.
+pub fn zebra_and_grid_colours(visuals: &Visuals) -> (Color32, Color32) {
+    let base = visuals.panel_fill;
+    let text = visuals.text_color();
+    (
+        mix(base, text, STRIPE_STRENGTH),
+        mix(base, text, GRID_STRENGTH),
+    )
+}
 ///
 /// Content coordinates start at zero. The header gutters lie outside the scrolling
 /// body, so they do not offset the cells, and `cell_min(0, 0)` is the body's own
@@ -467,8 +495,8 @@ fn paint_body(
     // and the lines read as one blur. Deriving both from the text colour at a fixed
     // fraction makes the relationship explicit — the line is three times the stripe's
     // strength — and holds in light and dark alike, rather than only in this theme.
-    let stripe_colour = visuals.text_color().gamma_multiply(STRIPE_STRENGTH);
-    let grid_line = visuals.text_color().gamma_multiply(GRID_STRENGTH);
+    let (stripe_colour, grid_line) = zebra_and_grid_colours(visuals);
+    let base_colour = visuals.panel_fill;
     // The sheet comes from the workbook, not from the selection: after a sheet switch
     // the selection can still name the old sheet for a frame.
     let sheet_id = wb.active_id();
@@ -492,11 +520,12 @@ fn paint_body(
                 }
                 None if in_selection && !is_active => visuals.selection.bg_fill,
                 None if row % 2 == 1 => stripe_colour,
-                None => Color32::TRANSPARENT,
+                // Every row is painted, not just the striped ones. The stripe is computed
+                // relative to the background, so leaving the unstriped rows transparent
+                // would mix the stripe against whatever happened to be behind the window.
+                None => base_colour,
             };
-            if bg != Color32::TRANSPARENT {
-                painter.rect_filled(rect, 0.0, bg);
-            }
+            painter.rect_filled(rect, 0.0, bg);
 
             painter.rect_stroke(rect, 0.0, Stroke::new(1.0, grid_line), StrokeKind::Inside);
 
