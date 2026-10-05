@@ -413,10 +413,11 @@ heading that says only "Omasheet" costs a row of grid height to say nothing the 
 does not already say. The modified marker rides in the formula bar's name box, next to the
 address it refers to.
 
-The ribbon departs from the original Omawrite-inspired sketch, which specified no ribbon.
-It is implemented as **collapsible and collapsed by default**: the toggle is
-`Ctrl+Shift+R` and the preference persists, so the low-chrome mode remains one keystroke
-away.
+The ribbon itself departs from the original Omawrite-inspired sketch, which specified no
+ribbon. When it arrives with the formatting UI it will be **collapsible and collapsed by
+default**, toggled by `Ctrl+Shift+R`, so the low-chrome mode stays one keystroke away. It
+is not built yet, and §7.3 lists `Ctrl+Shift+R` as not-yet-built; the paragraph above is
+the reason it will be collapsible rather than permanent, not a claim that it exists.
 
 ### 7.1 Grid
 
