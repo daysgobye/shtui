@@ -87,7 +87,7 @@ impl OmaApp {
         // cell, never both.
         let bar_owns_input = self.bar.focused(ui);
 
-        // The two share the window rather than being stacked by whatever order they were
+        // The two share the panel rather than being stacked by whatever order they were
         // added in, because the bar's height is not known until the text in it is: the
         // grid is given the remainder, so a long value shrinks the grid instead of
         // pushing the bar off the bottom of the screen.

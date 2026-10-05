@@ -484,9 +484,10 @@ fn a_locked_grid_reads_no_keys() {
 // There is no `Shift+Tab` test here. One was, and it asserted nothing: with the field out
 // of reach (see `pass_with` above) `grid::show` matched neither its `Delete`/`Backspace`
 // arm nor `handle_key`, which declines `Tab` outright, so the test would have passed
-// against a build with no formula bar in it at all. The claim it was named for is real —
-// the shifted pair is claimed by the app so egui cannot dedent the line — but it is only
-// observable with the field present, and lives with the field in `tests/formula_bar.rs`.
+// against a build with no formula bar in it at all. What it would have pinned — that
+// `Shift+Tab` neither edits the buffer nor moves the selection — needs the field, which is
+// both the thing holding the keyboard and the thing that would be editing the buffer, and
+// it lives with the field in `tests/formula_bar.rs`.
 
 #[test]
 fn selection_starts_as_a_single_cell() {

@@ -224,8 +224,9 @@ fn enter_moves_down_without_touching_the_buffer() {
     assert_eq!(h.value(A1), CellValue::Number(7.0));
 }
 
-/// `Tab` moves right and inserts nothing: with focus not locked, egui surrenders focus
-/// rather than typing a tab character, which is what keeps a tab out of cell values.
+/// `Tab` moves right and inserts nothing. The tab character never reaches the buffer
+/// because egui's multiline filter drops the `Tab` key before the widget sees it; what is
+/// pinned here is that the app's read of the key costs the buffer nothing either.
 #[test]
 fn tab_moves_right_and_inserts_no_tab_character() {
     let mut h = Bar::new();
@@ -389,7 +390,7 @@ fn a_multi_line_value_grows_the_bar() {
 #[test]
 fn the_bar_grows_to_its_cap_and_no_further() {
     let mut h = Bar::new();
-    // The cap is a share of the panel the bar shares with the grid, which fills the window
+    // The cap is a share of the panel it shares with the grid, which fills the window
     // today. Deriving it from the window here is the same number only for as long as that
     // is true — and if it stops being, the half-point assertion below says so rather than
     // quietly measuring the wrong thing.
@@ -414,9 +415,9 @@ fn the_bar_grows_to_its_cap_and_no_further() {
     );
 }
 
-/// `Tab` is claimed by the app rather than by the widget, which is why no cell value can
-/// contain a tab character from the keyboard. Paste is the other way in, and the field
-/// drops it there too: a tab in a cell value would silently corrupt the TSV the system
+/// No cell value can contain a tab character from the keyboard, because egui's multiline
+/// filter drops the `Tab` key before the widget sees it. Paste is the other way in, and the
+/// field drops it there too: a tab in a cell value would silently corrupt the TSV the system
 /// clipboard round-trips through.
 #[test]
 fn a_pasted_tab_never_reaches_a_cell_value() {
@@ -426,12 +427,14 @@ fn a_pasted_tab_never_reaches_a_cell_value() {
     assert_eq!(h.value(A1), CellValue::Text("xab".to_owned()));
 }
 
-/// `Shift+Tab` is the shifted pair of the key the app claims, and it is claimed for the same
-/// reason: it must not edit the buffer. This is the test the old claim in `grid_keys.rs`
-/// pointed at and could not be — it needs the field, because the field is both the thing
-/// holding the keyboard and the only widget here that could dedent a line.
+/// `Shift+Tab` edits nothing and moves nothing. The app counts only the unshifted chord,
+/// so the selection stays; egui's multiline filter has already dropped the key from the
+/// widget's events, so the buffer stays. This is the test the old comment in
+/// `grid_keys.rs` pointed at and could not be — it needs the field, because the field is
+/// both the thing holding the keyboard and the thing that would be editing the buffer.
 ///
-/// Two indented lines, so a dedent has somewhere to happen.
+/// The second line carries leading spaces, so either edit a `Tab` could make here —
+/// inserting one, or dedenting — would show in the buffer below.
 #[test]
 fn shift_tab_neither_dedents_the_line_nor_moves_the_selection() {
     let mut h = Bar::new();
@@ -441,10 +444,17 @@ fn shift_tab_neither_dedents_the_line_nor_moves_the_selection() {
     let cell = h.app.grid.selection.active;
 
     h.pass_with(key_with(Key::Tab, shift()), shift());
+    // This cannot fail against any current build: the widget's event filter removes the
+    // `Tab` key before the widget sees it, so there is no path by which this chord could
+    // edit the buffer whatever else the app did with it. It is kept as a guard on
+    // `TextEdit::multiline`'s `tab: false` default instead, because an egui minor bump
+    // flipping that to `true` is a realistic way to start typing a literal tab into a cell,
+    // and "a cell value never contains a tab" is an invariant worth spending an assertion
+    // on even when nothing can break it today.
     assert_eq!(
         h.field(),
         "one\n    two",
-        "the buffer must come through Shift+Tab byte-identical: the widget does not get it"
+        "a Tab reached the buffer: egui's multiline filter must be dropping Tab"
     );
     assert_eq!(
         h.app.grid.selection.active, cell,

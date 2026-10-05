@@ -14,9 +14,12 @@
 //! - `return_key(Shift+Enter)` inserts the newline and leaves plain `Enter` *completely*
 //!   unhandled. That is what lets `Enter` mean "move down" here: the buffer is
 //!   byte-identical after it, so moving cannot cost the user a character.
-//! - Focus is not locked by default, so `Tab` surrenders the keyboard instead of typing
-//!   a tab character. `TextEdit::code_editor` locks it, so that preset is not used: a
-//!   spreadsheet cell must never contain a tab.
+//! - No keystroke can put a tab character in the buffer. `TextEdit::multiline` sets
+//!   `tab: false` in its own event filter, and `events()` reads its input through that
+//!   filter, so a `Tab` key is dropped before the widget's event loop sees it: the field
+//!   can neither insert a tab nor dedent. `TextEdit::code_editor` is therefore not used
+//!   either, though for a different reason — it locks focus, which would take `Tab` away
+//!   from the app; on its own that does not put a tab in the buffer.
 //! - A focus request takes effect in the frame it is made, as long as the widget's id is
 //!   already known. Requesting focus before laying the field out is therefore what keeps
 //!   the keystroke that asked for focus from being swallowed — the alternative loses the
@@ -24,10 +27,11 @@
 //! - A focus request carries egui's *default* event filter, which surrenders on the arrow
 //!   keys, and [`eframe::egui::Memory::set_focus_lock_filter`] will not install another
 //!   until the field has held focus on an earlier frame. `TextEdit::multiline` asks for
-//!   one that claims the arrow keys — but not `Tab`, which has to reach the field as a
-//!   gesture *not* to edit so the app can read it as "next cell", nor `Esc`, which has to
-//!   reach egui to surrender the keyboard at all — and installs it as soon as that is
-//!   allowed. So for the frame a focus request lands on, and for the frame after every
+//!   one that claims the arrow keys — nor `Esc`, which has to reach egui to surrender
+//!   the keyboard at all — and installs it as soon as that is allowed. `Tab` is not part
+//!   of that claim: the multiline filter above removes it from the widget's events in
+//!   every frame, so the field is not what handles it and only the app sees it at all.
+//!   So for the frame a focus request lands on, and for the frame after every
 //!   `Tab`, the field is focused but unclaimed, and an arrow pressed in that frame is
 //!   read as a `FocusDirection` at the top of the frame and given to whatever widget egui
 //!   finds that way. Nothing here has to close that window by hand: the grid is not a
@@ -51,7 +55,7 @@ use crate::workbook::cell::{CellRef, CellValue, format_a1};
 /// a four-point margin, so this leaves the field a little air.
 pub const MIN_BAR_H: f32 = 24.0;
 
-/// The share of the panel the bar shares with the grid that the bar may take however long
+/// The share of the panel it shares with the grid that the bar may take however long
 /// the value is. Past this the field scrolls: a long Lua chunk has to stay readable without
 /// eating the grid.
 pub const MAX_BAR_FRACTION: f32 = 0.4;
@@ -186,9 +190,9 @@ fn write(wb: &mut Workbook, at: CellRef, text: &str) {
 /// dropped.
 ///
 /// A cell value is one line of TSV, so a tab inside one silently becomes a column break
-/// on the way through the system clipboard. No keystroke can produce a tab — `Tab` is
-/// claimed by the app — but a paste can, and it arrives in the buffer whether or not the
-/// model can hold it.
+/// on the way through the system clipboard. No keystroke can produce a tab — egui's
+/// multiline filter drops the `Tab` key before the widget sees it — but a paste can, and
+/// it arrives in the buffer whether or not the model can hold it.
 fn cell_text(text: &str) -> Cow<'_, str> {
     if text.contains(['\t', '\r']) {
         Cow::Owned(text.chars().filter(|c| *c != '\t' && *c != '\r').collect())
@@ -315,10 +319,11 @@ pub fn show(
     bar.height = wanted.clamp(MIN_BAR_H, cap);
 
     // Read after the field, because the widget leaves both keys unhandled by construction —
-    // which is the whole reason it is configured that way. Shift is checked explicitly:
-    // `Shift+Enter` and `Shift+Tab` are the same physical keys, and `key_pressed` says
-    // only that the key went down. Claiming the shifted pair as ours is also what stops
-    // `Shift+Tab` reaching the widget, where it would dedent the line instead.
+    // which is the whole reason it is configured that way. Neither key is kept out by
+    // anything here: `Tab` by the multiline filter described in the module docs, `Enter`
+    // by the `return_key` chord above. Shift is checked explicitly because `Shift+Enter`
+    // and `Shift+Tab` are the same physical keys and `key_pressed` says only that the key
+    // went down — without it, `Shift+Tab` would move the selection as `Tab` does.
     if owned_input {
         let (enter, tab, shift) = ui.input(|i| {
             (
@@ -329,9 +334,10 @@ pub fn show(
         });
         if !shift && (enter || tab) {
             bar.navigate = Some(if tab { Navigate::Right } else { Navigate::Down });
-            // Entry continues in the next cell. `Tab` surrendered the keyboard to reach
-            // egui's focus movement, so it has to be asked back; `Enter` never gave it
-            // up, and asking again is harmless.
+            // Entry continues in the next cell, so the keyboard has to be asked back rather than
+            // assumed: while the field's own filter is not installed yet, egui reads an
+            // unfiltered `Tab` as focus traversal and drops focus at the bottom of the
+            // frame. `Enter` never does that, but asking again is harmless.
             bar.focus_pending = true;
             ui.ctx().request_repaint();
         }
