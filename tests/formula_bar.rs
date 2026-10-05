@@ -436,7 +436,7 @@ fn a_pasted_tab_never_reaches_a_cell_value() {
 /// The second line carries leading spaces, so either edit a `Tab` could make here —
 /// inserting one, or dedenting — would show in the buffer below.
 #[test]
-fn shift_tab_neither_dedents_the_line_nor_moves_the_selection() {
+fn shift_tab_neither_reaches_the_field_nor_moves_the_selection() {
     let mut h = Bar::new();
     h.pass(type_text("one"));
     h.pass_with(key_with(Key::Enter, shift()), shift());
