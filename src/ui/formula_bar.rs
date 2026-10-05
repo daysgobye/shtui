@@ -8,8 +8,8 @@
 //!
 //! ## The egui behaviour this rests on
 //!
-//! All three of these were measured against 0.35.0 rather than read off the docs, and
-//! all three are load-bearing:
+//! All four of these were measured against 0.35.0 rather than read off the docs, and
+//! all four are load-bearing:
 //!
 //! - `return_key(Shift+Enter)` inserts the newline and leaves plain `Enter` *completely*
 //!   unhandled. That is what lets `Enter` mean "move down" here: the buffer is
@@ -21,6 +21,9 @@
 //!   already known. Requesting focus before laying the field out is therefore what keeps
 //!   the keystroke that asked for focus from being swallowed — the alternative loses the
 //!   first character of every edit.
+//! - A focus request carries egui's *default* event filter, which does not claim the
+//!   arrow keys, and no widget can replace it until it has held focus for a frame. See
+//!   [`FIELD_FILTER`] for what that costs and what closes it.
 //!
 //! A multiline `TextEdit` grows to fit its content and *cannot* be shrunk: `desired_rows`
 //! and `add_sized` both set a minimum, not a maximum. The cap therefore comes from an
@@ -29,7 +32,8 @@
 use std::borrow::Cow;
 
 use eframe::egui::{
-    Id, Key, KeyboardShortcut, Label, Modifiers, Rect, ScrollArea, TextEdit, Ui, UiBuilder, pos2,
+    EventFilter, Id, Key, KeyboardShortcut, Label, Modifiers, Rect, ScrollArea, TextEdit, Ui,
+    UiBuilder, pos2,
 };
 
 use crate::ui::grid::{self, HEADER_W};
@@ -48,6 +52,28 @@ pub const MAX_BAR_FRACTION: f32 = 0.4;
 /// widget, not from its rect, so the field keeps its keyboard when the bar changes height
 /// — but only if both this salt and the child `Ui` below are fixed.
 const FIELD_SALT: &str = "omasheet-formula-bar-field";
+
+/// Which keys the field keeps rather than letting egui move focus with.
+///
+/// Arrows claimed, `Tab` and `Esc` not: the arrow keys move the caret within the value,
+/// while `Tab` has to reach the field as a gesture *not* to edit so the app can read it as
+/// "next cell", and `Esc` has to reach egui to surrender the keyboard at all.
+///
+/// This is the same filter `TextEdit::multiline` asks for, restated here because of *when*
+/// it has to be in place. `TextEdit` will install one only once the field has held focus on
+/// an earlier frame, but [`Memory::request_focus`] hands focus over with egui's default,
+/// which surrenders on arrows. So for one frame after every focus request — and after every
+/// `Tab`, which surrenders by design — the field is focused but unclaimed, and an arrow
+/// pressed in that frame is read as a `FocusDirection` at the top of the frame and given to
+/// whatever widget egui finds that way. Installing it here on every frame closes that
+/// window from the second frame onwards; the first is closed the other way round, by the
+/// grid not being a focusable widget, so that search has nothing to find.
+const FIELD_FILTER: EventFilter = EventFilter {
+    horizontal_arrows: true,
+    vertical_arrows: true,
+    tab: false,
+    escape: false,
+};
 
 /// Which way `Enter` or `Tab` asked the selection to move.
 ///
@@ -203,6 +229,15 @@ pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, dirty: boo
     let owned_input = bar.focused(ui);
     let cap = (ui.ctx().input(|i| i.viewport_rect().height()) * MAX_BAR_FRACTION).max(MIN_BAR_H);
 
+    // Unconditional, and before anything else touches focus. `TextEdit` will not install a
+    // filter of its own until the field has held focus on an earlier frame, and the frame
+    // a focus request lands is precisely the frame where that is untrue, so this is the
+    // only place one can be installed early enough to matter. A no-op on every other
+    // frame, including the one that is too late to help.
+    if let Some(id) = bar.id {
+        ui.memory_mut(|m| m.set_focus_lock_filter(id, FIELD_FILTER));
+    }
+
     // Read before anything is applied: egui drops the keyboard on `Esc` before layout
     // runs, so this reports what the user pressed, not what the field now owns.
     let escape = ui.input(|i| i.key_pressed(Key::Escape));
@@ -311,15 +346,24 @@ pub fn show(bar: &mut FormulaBar, wb: &mut Workbook, target: CellRef, dirty: boo
         }
     }
 
-    // Not gated on focus: egui drops the keyboard on `Esc` before layout runs, so a field
-    // that *was* focused reads as unfocused by the time this runs.
-    if escape && bar.touched {
-        bar.text = bar.original.clone();
-        write(wb, target, &bar.text);
-        bar.touched = false;
-        // egui has already let the keyboard go; taking it back would defeat the point of
-        // pressing `Esc`.
+    // Not gated on focus or on `touched`, because by this point both are unreliable.
+    // egui drops the keyboard on `Esc` before layout runs, so a field that *was* focused
+    // already reads as unfocused; and a `Tab` in the frame before leaves egui holding the
+    // keyboard with an intent to hand it to the next widget that asks for it, which is
+    // this one. Left alone, `Esc` would then hand the keyboard straight back, which is the
+    // opposite of what the user asked for.
+    if escape {
+        if bar.touched {
+            bar.text = bar.original.clone();
+            write(wb, target, &bar.text);
+            bar.touched = false;
+            ui.ctx().request_repaint();
+        }
+        // Surrendered rather than requested back: taking the keyboard would defeat the
+        // point of pressing `Esc`.
         bar.focus_pending = false;
-        ui.ctx().request_repaint();
+        if let Some(id) = bar.id {
+            ui.memory_mut(|m| m.surrender_focus(id));
+        }
     }
 }

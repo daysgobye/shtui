@@ -431,7 +431,17 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, input_locked: bool, ui: &m
         .max_width(body.width())
         .auto_shrink([false, false])
         .show(&mut body_ui, |ui| {
-            let (response, painter) = ui.allocate_painter(content_size, Sense::click());
+            // `Sense::CLICK` rather than `Sense::click()`: the grid is not a focusable
+            // widget, and must not be one. It has no keyboard of its own — the app hands it
+            // the keys or stands it down — so being in egui's focus traversal is a
+            // liability, not a feature. A focusable widget is a candidate for the
+            // directional search that `Tab` and an *unclaimed* arrow key trigger, and
+            // focus arriving at the grid a frame after the formula bar took it would drop
+            // a keystroke. The field cannot prevent that by itself: egui hands over focus
+            // with a filter that surrenders on arrows, and a field cannot install its own
+            // until it has held focus for a frame, so the one frame in between is lost
+            // unless nothing else is willing to take the keyboard.
+            let (response, painter) = ui.allocate_painter(content_size, Sense::CLICK);
             let origin = response.rect.min;
 
             let pos = response.interact_pointer_pos();

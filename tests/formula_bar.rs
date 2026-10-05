@@ -10,7 +10,7 @@
 //! The pointer is the exception, as everywhere in this repo: `Context::run_ui` does not
 //! simulate clicks, so "clicking a cell focuses the bar" is hand-verified only.
 
-use egui::{Event, Key, Modifiers, RawInput, Rect, pos2, vec2};
+use egui::{Event, Key, Modifiers, RawInput, Rect, Vec2, pos2, vec2};
 use omasheet::app::app::OmaApp;
 use omasheet::ui::formula_bar::{MAX_BAR_FRACTION, MIN_BAR_H};
 use omasheet::workbook::cell::{CellRef, CellValue};
@@ -58,10 +58,11 @@ fn screen() -> Rect {
     Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 700.0))
 }
 
-/// The app plus the context it runs in.
+/// The app, the context it runs in, and the size of the window it runs in.
 struct Bar {
     ctx: egui::Context,
     app: OmaApp,
+    size: Vec2,
 }
 
 impl Bar {
@@ -72,9 +73,15 @@ impl Bar {
     /// has a frame before the user's first keystroke, so every test starts from the same
     /// place rather than from a state the app can never be in.
     fn new() -> Self {
+        Self::with_size(screen().size())
+    }
+
+    /// As `new`, but in a window of another size.
+    fn with_size(size: Vec2) -> Self {
         let mut bar = Bar {
             ctx: egui::Context::default(),
             app: OmaApp::default(),
+            size,
         };
         bar.pass(Vec::new());
         bar
@@ -86,12 +93,12 @@ impl Bar {
 
     fn pass_with(&mut self, events: Vec<Event>, modifiers: Modifiers) {
         let input = RawInput {
-            screen_rect: Some(screen()),
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), self.size)),
             events,
             modifiers,
             ..Default::default()
         };
-        let Bar { ctx, app } = self;
+        let Bar { ctx, app, .. } = self;
         // `body`, not `ui`: the production `eframe::App::ui` needs an `eframe::Frame`
         // that cannot be constructed outside a running eframe event loop.
         let _ = ctx.run_ui(input, |ui| app.body(ui));
@@ -100,6 +107,15 @@ impl Bar {
     /// The cell's value as the formula bar would show it.
     fn field(&self) -> &str {
         self.app.bar.text()
+    }
+
+    /// The id egui says holds the keyboard, or `None` if nothing does.
+    ///
+    /// The field's own id is not published, so the assertions built on this ask whether the
+    /// *same* widget still has it, which is what a focus theft looks like from here: egui
+    /// moves focus to another widget rather than dropping it.
+    fn focused(&self) -> Option<egui::Id> {
+        self.ctx.memory(|m| m.focused())
     }
 
     fn value(&self, at: CellRef) -> CellValue {
@@ -377,10 +393,13 @@ fn the_bar_grows_to_its_cap_and_no_further() {
         h.pass_with(key_with(Key::Enter, shift()), shift());
         h.pass(type_text("x"));
     }
-    assert_eq!(
-        h.app.bar.min_height(),
-        cap,
-        "the bar must stop at its cap rather than eating the window"
+    // Within half a point rather than equal: the cap only *reaches* the window by way of
+    // `clamp` handing back a bound verbatim, and that is an implementation detail of a
+    // float comparison rather than the claim being made here.
+    assert!(
+        (h.app.bar.min_height() - cap).abs() < 0.5,
+        "the bar stopped at {}pt, not at its cap of {cap}pt",
+        h.app.bar.min_height()
     );
     assert_eq!(
         h.field().lines().count(),
@@ -434,4 +453,50 @@ fn f2_focuses_the_field_seeded_with_the_current_value() {
     h.pass(type_text("!"));
     assert_eq!(h.field(), "rent!");
     assert_eq!(h.value(A1), CellValue::Text("rent!".to_owned()));
+}
+
+/// An arrow key must move the caret, not the keyboard.
+///
+/// The window is one keystroke wide and it is real. egui hands over focus with its
+/// *default* event filter, which surrenders focus on the arrow keys, and a field cannot
+/// install a filter of its own until it has held focus on an earlier frame — so on the
+/// frame after a focus request the field is focused but unclaimed, and egui reads the
+/// arrow as a `FocusDirection` at the top of that frame and hands focus to whatever
+/// widget it finds in that direction at the bottom. `Tab` opens the same window, since it
+/// surrenders focus by design. `Enter` is safe: it is read after the field has been shown,
+/// by which time the field's own filter is in place.
+///
+/// The window here is 4,000 x 6,000, and that is the point rather than a quirk. The grid's
+/// focusable rect is the size of the whole sheet rather than of the window, so in an
+/// ordinary window it swallows the field whole, the directional search finds nothing, and
+/// the bug hides — which is exactly why this has to be pinned where the search has
+/// somewhere to go.
+#[test]
+fn an_arrow_key_does_not_take_the_keyboard_out_of_the_field() {
+    let mut h = Bar::with_size(vec2(4_000.0, 6_000.0));
+    h.pass(type_text("a"));
+    let field = h.focused();
+    assert!(
+        field.is_some(),
+        "precondition: typing on the grid focused the bar"
+    );
+
+    // The frame focus arrives on, and the frame after it: the window is these two.
+    h.pass(key(Key::ArrowUp));
+    assert_eq!(
+        h.focused(),
+        field,
+        "the arrow key moved the keyboard instead of the caret"
+    );
+    h.pass(key(Key::ArrowUp));
+    assert_eq!(
+        h.focused(),
+        field,
+        "and the next one found a widget to hand it to"
+    );
+
+    // The keystroke that would have been swallowed if focus had gone is what proves the
+    // caret moved instead: two `ArrowUp`s put it at the front of the value.
+    h.pass(type_text("x"));
+    assert_eq!(h.field(), "xa");
 }
