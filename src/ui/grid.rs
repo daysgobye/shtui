@@ -9,6 +9,12 @@
 //! which lives in a child `Ui` sized by `max_rect`. Painting them from the scrolled
 //! content origin instead would scroll the column letters and row numbers off screen
 //! along with the cells.
+//!
+//! The grid holds no editor. Text is typed in the formula bar, so this module's whole
+//! involvement in editing is [`GridState::focus_requested`]: a gesture that means "the
+//! user wants to type" asks for the keyboard, and the app decides what that means. A
+//! second editor here could disagree with the first one about what a cell contains, which
+//! is the defect this design removes.
 
 use eframe::egui::{
     Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2, Visuals, pos2,
@@ -16,7 +22,7 @@ use eframe::egui::{
 };
 
 use crate::workbook::Workbook;
-use crate::workbook::cell::{CellRef, CellValue, SheetId, col_to_letters};
+use crate::workbook::cell::{CellRef, SheetId, col_to_letters};
 
 pub const ROW_H: f32 = 22.0;
 pub const COL_W: f32 = 100.0;
@@ -61,23 +67,60 @@ impl Selection {
     }
 }
 
-/// State of an in-progress edit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EditState {
-    pub active: CellRef,
-    pub buffer: String,
-}
-
+/// The grid's state.
 #[derive(Clone, Debug, Default)]
 pub struct GridState {
     pub selection: Selection,
-    pub edit: Option<EditState>,
+    /// Set when a gesture means "the user wants to type here": a printable character,
+    /// `F2`, or a double click. The grid consumes the gesture and asks for the keyboard;
+    /// it does not know what will receive it. [`crate::app::app::OmaApp::body`] clears the
+    /// flag by handing it to the formula bar.
+    pub focus_requested: bool,
 }
 
 impl GridState {
     pub fn new() -> Self {
         Self::default()
     }
+}
+
+/// One step of cell movement.
+///
+/// Shared by the grid's arrow keys and the formula bar's `Enter` and `Tab`, so both clamp
+/// identically: a commit-move that could walk off the content rect would strand the
+/// highlight where it is never painted and cannot be scrolled back to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// The cell one step from `from`, clamped to the scrollable extent.
+fn step_from(from: CellRef, rows: u32, cols: u32, step: Step) -> CellRef {
+    let (row, col) = match step {
+        Step::Up => (from.row.saturating_sub(1), from.col),
+        Step::Down => (from.row + 1, from.col),
+        Step::Left => (from.row, from.col.saturating_sub(1)),
+        Step::Right => (from.row, from.col + 1),
+    };
+    CellRef::new(
+        from.sheet,
+        row.min(rows.saturating_sub(1)),
+        col.min(cols.saturating_sub(1)),
+    )
+}
+
+/// Move the active cell one `step`, taking the anchor with it.
+///
+/// The bar's `Enter` and `Tab` arrive as this rather than as a key, because the bar does
+/// not know how a move is clamped — only the grid does.
+pub fn step_active(state: &mut GridState, wb: &Workbook, step: Step) {
+    let (rows, cols) = content_extent(wb);
+    let next = step_from(state.selection.active, rows, cols, step);
+    state.selection.active = next;
+    state.selection.anchor = next;
 }
 
 /// The top-left of cell `(row, col)` in grid content coordinates.
@@ -171,41 +214,32 @@ fn content_extent(wb: &Workbook) -> (u32, u32) {
 
 /// Apply a movement key to the selection. Returns true when the key was consumed.
 ///
-/// The move is clamped to the scrollable extent: without the clamp the active cell can
-/// leave the content rect, where its highlight is never painted and there is no way to
-/// scroll to it. Following the selection with the view is a later milestone.
-fn handle_key(
-    state: &mut GridState,
-    wb: &Workbook,
-    rows: u32,
-    cols: u32,
-    k: egui::Key,
-    shift: bool,
-) -> bool {
-    let sheet = wb.active_id();
-    let (mut row, mut col) = (state.selection.active.row, state.selection.active.col);
-    match k {
-        egui::Key::ArrowUp => row = row.saturating_sub(1),
-        egui::Key::ArrowDown => row += 1,
-        egui::Key::ArrowLeft => col = col.saturating_sub(1),
-        egui::Key::ArrowRight => col += 1,
-        egui::Key::Home => col = 0,
+/// The move is clamped to the scrollable extent, and `Shift` extends the selection instead
+/// of moving the anchor. Following the selection with the view is a later milestone.
+fn handle_key(state: &mut GridState, wb: &Workbook, k: egui::Key, shift: bool) -> bool {
+    let (rows, cols) = content_extent(wb);
+    let active = state.selection.active;
+    let next = match k {
+        egui::Key::ArrowUp => step_from(active, rows, cols, Step::Up),
+        egui::Key::ArrowDown => step_from(active, rows, cols, Step::Down),
+        egui::Key::ArrowLeft => step_from(active, rows, cols, Step::Left),
+        egui::Key::ArrowRight => step_from(active, rows, cols, Step::Right),
+        egui::Key::Home => CellRef::new(active.sheet, active.row, 0),
         _ => return false,
-    }
-    let last_row = rows.saturating_sub(1);
-    let last_col = cols.saturating_sub(1);
-    state.selection.active = CellRef::new(sheet, row.min(last_row), col.min(last_col));
+    };
+    state.selection.active = next;
     if !shift {
-        state.selection.anchor = state.selection.active;
+        state.selection.anchor = next;
     }
     true
 }
 
 /// Collect this frame's key-down events and whether shift is held.
 ///
-/// Text input is deliberately not collected: `Ui::input` takes `FnOnce(&InputState)`, so
-/// an owned text buffer would mean cloning every string, and nothing consumes one here
-/// yet. The task that adds editing reads `Event::Text` in its own `ui.input` call.
+/// Text input is collected separately by [`read_text`]: `Ui::input` takes
+/// `FnOnce(&InputState)`, so one closure can build one owned collection, and folding the
+/// second into this tuple would couple every caller to the question of what starts an
+/// edit.
 fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, bool) {
     ui.input(|i| {
         let mut keys = Vec::new();
@@ -226,13 +260,21 @@ fn read_input(ui: &egui::Ui) -> (Vec<egui::Key>, bool) {
     })
 }
 
-/// Collect this frame's text-input events.
+/// Whether this frame carries text that means "start typing".
 ///
-/// A second `ui.input` pass rather than a third element on [`read_input`]'s tuple:
-/// `Ui::input` takes `FnOnce(&InputState)`, so one closure can build one owned
-/// collection, and threading a second one through would couple every caller to the
-/// edit lifecycle for no gain at two calls a frame.
-fn read_text(ui: &egui::Ui) -> Vec<String> {
+/// Control-only text does not count: egui-winit already filters it at the source, but
+/// `Event::Text`'s own contract only asks an integration to withhold text for Enter — a
+/// backend that leaks it must not hand the keyboard to the formula bar.
+///
+/// Shared with the bar, which needs the same answer for the same frame to tell a
+/// keystroke that starts a fresh value from one that edits the one already there. Two
+/// copies of that rule could disagree about which of two frames is which.
+pub fn typed_printable(text: &[String]) -> bool {
+    text.iter().any(|t| !t.chars().all(char::is_control))
+}
+
+/// Collect this frame's text-input events.
+pub fn read_text(ui: &egui::Ui) -> Vec<String> {
     ui.input(|i| {
         i.events
             .iter()
@@ -249,19 +291,22 @@ fn read_text(ui: &egui::Ui) -> Vec<String> {
 pub enum CellAction {
     /// Nothing: no button was pressed, or the press landed outside the body.
     None,
-    /// A single click: commit any edit in progress, then select `cell`.
+    /// A click: select `cell`.
     Select(CellRef),
-    /// A double click: open an editor seeded from `cell`.
-    Edit(CellRef),
 }
 
 /// Decide what a pointer event at `pos` in the grid body means.
 ///
 /// Split out of the `ScrollArea` closure so the decision is testable without a window.
 /// `Context::run_ui` does not simulate pointer input at all, so `Response::clicked` and
-/// `Response::double_clicked` are the second link in this chain that no headless test can
-/// reach — they arrive here as plain booleans instead of being read off a `Response`.
+/// `Response::double_clicked` are the link in this chain that no headless test can reach
+/// — they arrive here as plain booleans instead of being read off a `Response`.
 /// [`click_to_selection`] covers the remaining, pointer-mapping half.
+///
+/// A double click selects like any other click. It used to mean "open an editor here", and
+/// now means "and hand the keyboard over" — a request the grid raises through
+/// [`GridState::focus_requested`] rather than an action it can take itself, because there
+/// is no editor left here to open.
 pub fn click_action(
     origin: Pos2,
     pos: Pos2,
@@ -272,43 +317,8 @@ pub fn click_action(
     if !(clicked || double_clicked) {
         return CellAction::None;
     }
-    let Some(cell) = click_to_selection(origin, pos, sheet) else {
-        return CellAction::None;
-    };
-    // A double click also reports `clicked()`, so it has to be recognised first. Treated
-    // as a single click it would commit and move the selection, and only the *next* click
-    // of the pair would open the editor — on the wrong cell, one click too late.
-    if double_clicked {
-        CellAction::Edit(cell)
-    } else {
-        CellAction::Select(cell)
-    }
-}
-
-/// Begin editing `at`, seeding the buffer with the cell's current text.
-pub fn begin_edit(state: &mut GridState, wb: &Workbook, at: CellRef) {
-    let buffer = wb.value_at(at).to_input_string();
-    state.edit = Some(EditState { active: at, buffer });
-}
-
-/// Commit the in-progress edit into the model. Does nothing if no edit is active.
-pub fn commit_edit(state: &mut GridState, wb: &mut Workbook) {
-    let Some(edit) = state.edit.take() else {
-        return;
-    };
-    match CellValue::from_text(&edit.buffer) {
-        // Committing an empty buffer clears the cell rather than storing an empty
-        // one: `set_cell` would extend the used range and mark the workbook dirty,
-        // which is how an F2-then-Enter on an untouched cell used to claim unsaved
-        // changes. `clear_cell` is already no-op safe for an absent cell.
-        CellValue::Empty => wb.clear_cell(edit.active),
-        value => wb.set_cell(edit.active, value),
-    }
-}
-
-/// Abandon the in-progress edit.
-pub fn cancel_edit(state: &mut GridState) {
-    state.edit = None;
+    // A double click also reports `clicked()`, so either answer selects the same cell.
+    click_to_selection(origin, pos, sheet).map_or(CellAction::None, CellAction::Select)
 }
 
 /// Every cell in the selection rectangle, in row-major order.
@@ -325,7 +335,12 @@ fn selection_cells(state: &GridState) -> Vec<CellRef> {
 }
 
 /// Draw the grid and process navigation.
-pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
+///
+/// `input_locked` says the keyboard belongs to the formula bar. The grid then reads
+/// nothing: one `Backspace` must not both delete a character from the field and clear the
+/// cell underneath it, and only the widget holding focus can be trusted to consume a key
+/// exactly once.
+pub fn show(state: &mut GridState, wb: &mut Workbook, input_locked: bool, ui: &mut egui::Ui) {
     let (rows, cols) = content_extent(wb);
     let content_size = Vec2::new(cols as f32 * COL_W, rows as f32 * ROW_H);
     let outer = ui.available_rect_before_wrap();
@@ -341,85 +356,41 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
         ),
     );
 
-    // An edit owns the caret; moving the selection underneath it would fight the edit.
     let mut handled = false;
-    let (keys, shift) = read_input(ui);
-    let text = read_text(ui);
-
-    if state.edit.is_some() {
-        // Continuing an edit. The keystroke that opened it was consumed by the branch
-        // below, so nothing here can double-apply the first character.
-        for t in &text {
-            if let Some(edit) = state.edit.as_mut() {
-                edit.buffer.push_str(t);
-            }
+    if !input_locked {
+        let (keys, shift) = read_input(ui);
+        let text = read_text(ui);
+        if keys.contains(&egui::Key::F2) {
+            // Two ways in, and both mean the same thing to the grid: `F2` to edit what is
+            // already there, a printable character to start from nothing. Either way the
+            // grid's own job is over, so navigation does not also run — moving the
+            // selection out from under a caret that is on its way would leave the field
+            // bound to a cell that is no longer the selected one.
+            state.focus_requested = true;
             handled = true;
-        }
-        for k in &keys {
-            match k {
-                egui::Key::Enter | egui::Key::Tab => {
-                    commit_edit(state, wb);
-                    // The caret lands where a spreadsheet puts it: down, up under shift,
-                    // or right for Tab. Clamped like every other move, so committing the
-                    // last cell cannot strand the highlight off the content rect.
-                    let last_row = rows.saturating_sub(1);
-                    let last_col = cols.saturating_sub(1);
-                    let active = state.selection.active;
-                    let (row, col) = match k {
-                        // `Shift+Tab` moves left and plain `Tab` moves right, so the
-                        // unshifted case has to be matched first: `Tab` on its own would
-                        // otherwise swallow the shifted one and move right either way.
-                        egui::Key::Tab if !shift => (active.row, active.col + 1),
-                        egui::Key::Tab => (active.row, active.col.saturating_sub(1)),
-                        _ if shift => (active.row.saturating_sub(1), active.col),
-                        _ => (active.row + 1, active.col),
-                    };
-                    state.selection.active =
-                        CellRef::new(active.sheet, row.min(last_row), col.min(last_col));
-                    state.selection.anchor = state.selection.active;
-                    handled = true;
-                }
-                egui::Key::Escape => {
-                    cancel_edit(state);
-                    handled = true;
-                }
-                _ => {}
-            }
-        }
-    } else if keys.contains(&egui::Key::F2) {
-        begin_edit(state, wb, state.selection.active);
-        handled = true;
-    } else if let Some(t) = text.iter().find(|t| !t.chars().all(char::is_control)) {
-        // Control-only text cannot start an edit. egui-winit already filters it at the
-        // source, but `Event::Text`'s own contract only asks an integration to withhold
-        // text for Enter — a backend that leaks it must not open a cell editor.
-        state.edit = Some(EditState {
-            active: state.selection.active,
-            buffer: t.clone(),
-        });
-        handled = true;
-    } else {
-        // Not editing, and nothing typed: navigate, or clear the selection. F2 and text
-        // have already had their turn above, so the keystroke that starts an edit never
-        // also moves the selection out from under the caret.
-        for k in &keys {
-            match k {
-                egui::Key::Delete | egui::Key::Backspace => {
-                    for cell in selection_cells(state) {
-                        wb.clear_cell(cell);
-                    }
-                    handled = true;
-                }
-                _ => {
-                    if handle_key(state, wb, rows, cols, *k, shift) {
+        } else if typed_printable(&text) {
+            state.focus_requested = true;
+            handled = true;
+        } else {
+            for k in &keys {
+                match k {
+                    egui::Key::Delete | egui::Key::Backspace => {
+                        for cell in selection_cells(state) {
+                            wb.clear_cell(cell);
+                        }
                         handled = true;
+                    }
+                    _ => {
+                        if handle_key(state, wb, *k, shift) {
+                            handled = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
+    let mut body_ui = ui.new_child(UiBuilder::new().id_salt("grid-body").max_rect(body));
     let output = egui::ScrollArea::both()
         .max_height(body.height())
         .max_width(body.width())
@@ -441,26 +412,17 @@ pub fn show(state: &mut GridState, wb: &mut Workbook, ui: &mut egui::Ui) {
             match action {
                 CellAction::None => {}
                 CellAction::Select(cell) => {
-                    // Commit before moving the selection. An edit stays anchored to the
-                    // cell it began on, so moving first would leave the highlight on a
-                    // cell that is not the one being edited, and the next commit-move
-                    // would step the caret from there instead of from the edited cell.
-                    commit_edit(state, wb);
                     state.selection.active = cell;
                     state.selection.anchor = cell;
                     handled = true;
                 }
-                CellAction::Edit(cell) => {
-                    // Double-clicking the cell already open must not reseed the buffer
-                    // from the model, which would throw away what has been typed into it.
-                    if state.edit.as_ref().map(|edit| edit.active) != Some(cell) {
-                        commit_edit(state, wb);
-                        begin_edit(state, wb, cell);
-                    }
-                    state.selection.active = cell;
-                    state.selection.anchor = cell;
-                    handled = true;
-                }
+            }
+            if response.double_clicked() {
+                // A double click asks for the keyboard. There is nothing to open here —
+                // the field is somewhere else entirely — so the request is all it can
+                // mean, and the app decides where it goes.
+                state.focus_requested = true;
+                handled = true;
             }
 
             paint_body(state, wb, &painter, &visuals, origin, rows, cols);
@@ -542,18 +504,6 @@ fn paint_body(
                 paint_cell_text(painter, rect, cell.formatted(), colour);
             }
         }
-    }
-
-    if let Some(edit) = &state.edit {
-        let rect = cell_rect(edit.active.row, edit.active.col).translate(origin.to_vec2());
-        painter.rect_filled(rect, 0.0, visuals.extreme_bg_color);
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(2.0, visuals.selection.stroke.color),
-            StrokeKind::Middle,
-        );
-        paint_cell_text(painter, rect, edit.buffer.clone(), visuals.text_color());
     }
 }
 

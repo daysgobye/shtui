@@ -4,15 +4,22 @@
 //!
 //! One link in the input chain is unreachable here: egui's `Context::run_ui` does not
 //! simulate pointer input at all (a plain `ui.button` also fails to report `clicked()`
-//! under it), so `response.clicked()` cannot be exercised. The pointer-to-selection
-//! mapping around it is covered directly by the `click_to_selection` tests.
+//! under it), so `response.clicked()` and `response.double_clicked()` cannot be exercised.
+//! The pointer-to-selection mapping around it is covered directly by the
+//! `click_to_selection` tests, and clicking to focus the formula bar is checked by hand
+//! against the real window.
+//!
+//! Typing is not here either: it goes through one widget now, and everything about it
+//! lives in `tests/formula_bar.rs`.
 
 use std::time::{Duration, Instant};
 
 use egui::{Event, Key, Modifiers, Pos2, RawInput, Rect, Vec2, pos2, vec2};
 use omasheet::app::app::OmaApp;
 use omasheet::io::csv_read::read_csv;
+use omasheet::ui::grid;
 use omasheet::ui::grid::*;
+use omasheet::workbook::Workbook;
 use omasheet::workbook::cell::{CellRange, CellRef, CellValue};
 
 /// A key-down event for `k`.
@@ -60,6 +67,34 @@ fn pass(app: &mut OmaApp, events: Vec<Event>) {
 fn pass_with(app: &mut OmaApp, events: Vec<Event>, modifiers: Modifiers) {
     let ctx = egui::Context::default();
     pass_on(app, &ctx, events, modifiers);
+}
+
+/// Drive the grid on its own, with no `OmaApp::body` around it.
+///
+/// `body` consumes `focus_requested` every frame, which is the wiring rather than the
+/// behaviour: the flag's whole job is to be set in here and read out there, so a test that
+/// went through `body` could only ever see it false.
+fn grid_pass(state: &mut GridState, wb: &mut Workbook, events: Vec<Event>) {
+    grid_pass_locked(state, wb, events, false)
+}
+
+/// As `grid_pass`, but saying the keyboard belongs to the formula bar.
+fn grid_pass_locked(
+    state: &mut GridState,
+    wb: &mut Workbook,
+    events: Vec<Event>,
+    input_locked: bool,
+) {
+    let ctx = egui::Context::default();
+    let input = RawInput {
+        screen_rect: Some(screen()),
+        events,
+        modifiers: Modifiers::default(),
+        ..Default::default()
+    };
+    let _ = ctx.run_ui(input, |ui| {
+        grid::show(state, wb, input_locked, ui);
+    });
 }
 
 /// As `pass_with`, but against a context the caller owns, so consecutive passes share one.
@@ -355,38 +390,102 @@ fn millis(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
+/// Control-only text must not hand the keyboard to the formula bar. egui-winit already
+/// filters it at the source, but `Event::Text`'s own contract only asks an integration to
+/// withhold text for Enter, and a backend that leaks it must not steal focus.
 #[test]
-fn a_text_event_starts_an_edit_rather_than_navigating() {
-    // This pin was written in Task 5 to record that typing did *not* yet edit, so that
-    // Task 6 would change it deliberately. It now asserts the deliberate change: the
-    // text opens an edit, leaves the selection where it was, and reaches the model only
-    // on commit.
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("hi"));
-    assert_eq!(
-        app.grid.edit.as_ref().map(|e| e.buffer.as_str()),
-        Some("hi")
+fn a_control_only_text_event_does_not_ask_for_focus() {
+    let (mut state, mut wb) = (GridState::new(), Workbook::new());
+    grid_pass(&mut state, &mut wb, type_text("\t"));
+    assert!(!state.focus_requested);
+}
+
+#[test]
+fn typing_on_the_grid_asks_for_focus() {
+    let (mut state, mut wb) = (GridState::new(), Workbook::new());
+    grid_pass(&mut state, &mut wb, type_text("hi"));
+    assert!(
+        state.focus_requested,
+        "a printable character asks for focus"
     );
+}
+
+/// The flag is a request, not a mode, so a frame with nothing in it must not raise one.
+/// Nothing here clears it — the app does, in the same frame — so this is the grid's half
+/// of the contract: it raises a request only for a gesture that means one.
+#[test]
+fn a_frame_with_nothing_in_it_does_not_ask_for_focus() {
+    let (mut state, mut wb) = (GridState::new(), Workbook::new());
+    grid_pass(&mut state, &mut wb, Vec::new());
+    assert!(!state.focus_requested);
+    grid_pass(&mut state, &mut wb, key(Key::ArrowDown));
+    assert!(
+        !state.focus_requested,
+        "navigating is not a request for the keyboard"
+    );
+}
+
+/// The second way in, and the one that means "edit what is here" rather than "start from
+/// nothing". The difference is invisible in the grid, which is why the bar works it out
+/// from the frame's own text rather than being told.
+#[test]
+fn f2_on_the_grid_asks_for_focus() {
+    let (mut state, mut wb) = (GridState::new(), Workbook::new());
+    grid_pass(&mut state, &mut wb, key(Key::F2));
+    assert!(state.focus_requested);
+}
+
+/// Typing asks for focus rather than moving the selection, and does not also clear the
+/// cell the way `Delete` does: one keystroke, one meaning.
+#[test]
+fn typing_on_the_grid_neither_navigates_nor_clears() {
+    let (mut state, mut wb) = (GridState::new(), Workbook::new());
+    let a1 = CellRef::new(0, 0, 0);
+    wb.set_cell(a1, CellValue::Text("rent".into()));
+    wb.clear_dirty();
+    grid_pass(&mut state, &mut wb, type_text("7"));
+    assert_eq!(state.selection.active, a1);
+    assert_eq!(wb.value_at(a1), CellValue::Text("rent".into()));
+    assert!(!wb.dirty());
+}
+
+/// `input_locked` says the formula bar holds the keyboard. The grid must then read nothing
+/// at all, or one `Backspace` both deletes a character from the field and clears the cell
+/// underneath it.
+#[test]
+fn a_locked_grid_reads_no_keys() {
+    let (mut state, mut wb) = (GridState::new(), Workbook::new());
+    let a1 = CellRef::new(0, 0, 0);
+    wb.set_cell(a1, CellValue::Text("rent".into()));
+    grid_pass_locked(
+        &mut state,
+        &mut wb,
+        [
+            key(Key::Delete),
+            key(Key::ArrowDown),
+            key(Key::F2),
+            type_text("x"),
+        ]
+        .concat(),
+        true,
+    );
+    assert_eq!(state.selection.active, a1);
+    assert!(!state.focus_requested);
+    assert_eq!(wb.value_at(a1), CellValue::Text("rent".into()));
+}
+
+/// `Shift+Tab` is claimed rather than left to reach the field, where egui would dedent the
+/// line. Claimed and given nothing else to do, it must not move anything either.
+#[test]
+fn shift_tab_is_claimed_by_the_app_and_does_nothing() {
+    let mut app = OmaApp::default();
+    let shift = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    pass_with(&mut app, key(Key::Tab), shift);
     assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
     assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
-}
-
-#[test]
-fn arrow_keys_do_not_move_the_selection_while_editing() {
-    // An edit owns the caret. If navigation also ran, the highlight would slide out
-    // from under the editor and Enter would commit relative to the wrong cell.
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("7"));
-    pass(&mut app, key(Key::ArrowDown));
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
-    assert_eq!(app.grid.edit.as_ref().map(|e| e.buffer.as_str()), Some("7"));
-}
-
-#[test]
-fn a_control_only_text_event_does_not_open_an_edit() {
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("\t"));
-    assert!(app.grid.edit.is_none());
 }
 
 #[test]
@@ -394,64 +493,6 @@ fn selection_starts_as_a_single_cell() {
     let state = GridState::new();
     assert!(state.selection.is_single());
     assert_eq!(state.selection.range(), CellRange::new(0, 0, 0, 0));
-}
-
-#[test]
-fn typing_a_character_starts_editing_with_that_character() {
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("7"));
-    let edit = app.grid.edit.as_ref().expect("typing should start an edit");
-    assert_eq!(edit.buffer, "7");
-    assert_eq!(edit.active, CellRef::new(0, 0, 0));
-}
-
-#[test]
-fn enter_commits_the_edit_and_moves_down() {
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("7"));
-    pass(&mut app, key(Key::Enter));
-    assert!(app.grid.edit.is_none());
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Number(7.0)
-    );
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 1, 0));
-}
-
-#[test]
-fn tab_commits_the_edit_and_moves_right() {
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("7"));
-    pass(&mut app, key(Key::Tab));
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Number(7.0)
-    );
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 1));
-}
-
-#[test]
-fn escape_cancels_the_edit_and_leaves_the_cell_alone() {
-    let mut app = OmaApp::default();
-    app.wb
-        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("original".into()));
-    pass(&mut app, type_text("clobbered"));
-    pass(&mut app, key(Key::Escape));
-    assert!(app.grid.edit.is_none());
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Text("original".into())
-    );
-}
-
-#[test]
-fn f2_starts_an_edit_seeded_with_the_current_text() {
-    let mut app = OmaApp::default();
-    app.wb
-        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("rent".into()));
-    pass(&mut app, key(Key::F2));
-    let edit = app.grid.edit.as_ref().expect("F2 should start an edit");
-    assert_eq!(edit.buffer, "rent");
 }
 
 #[test]
@@ -465,190 +506,47 @@ fn delete_clears_the_active_cell_and_marks_dirty() {
     assert!(app.wb.dirty());
 }
 
-/// This test previously bore the name `editing_an_empty_cell_and_committing_empty_leaves_it_empty`
-/// while typing `"x"` and pressing `Escape` — it covered cancelling, not committing, and so
-/// never reached the defect it claimed to name. The commit route is covered below.
-#[test]
-fn commit_edit_clears_rather_than_stores_an_empty_buffer() {
-    let mut app = OmaApp::default();
-    // Whichever key opened the editor, an empty buffer must clear the cell, not store an
-    // Empty-valued one. Storing it extends the used range and marks the workbook dirty, so
-    // an editor that is opened and committed without typing claims unsaved changes.
-    app.grid.edit = Some(EditState {
-        active: CellRef::new(0, 0, 0),
-        buffer: String::new(),
-    });
-    commit_edit(&mut app.grid, &mut app.wb);
-    assert!(
-        app.wb.cell(CellRef::new(0, 0, 0)).is_none(),
-        "no phantom cell should be left behind"
-    );
-    assert!(
-        app.wb.active().used().is_none(),
-        "the used range should not extend to cover a cell that holds nothing"
-    );
-    assert!(!app.wb.dirty(), "committing nothing is not a change");
-}
-
-/// The `F2`-then-`Enter` route on an untouched cell: the buffer is empty because the cell
-/// was, so the commit is a no-op and the "modified" marker must stay off.
+/// `F2`-then-`Enter` on an untouched cell must leave the workbook clean. Nothing was typed,
+/// so nothing was written: with every keystroke reaching the model live there is no commit
+/// step here at all, so the "modified" marker has nothing to switch on.
 #[test]
 fn f2_then_enter_on_an_untouched_cell_leaves_the_workbook_clean() {
     let mut app = OmaApp::default();
     pass(&mut app, key(Key::F2));
-    let edit = app.grid.edit.as_ref().expect("F2 should start an edit");
-    assert_eq!(edit.buffer, "", "an empty cell seeds an empty buffer");
     pass(&mut app, key(Key::Enter));
-    assert!(app.grid.edit.is_none());
     assert!(app.wb.cell(CellRef::new(0, 0, 0)).is_none());
     assert!(app.wb.active().used().is_none());
     assert!(!app.wb.dirty());
 }
 
-/// The same two keys over a populated cell do *not* clear it: `F2` seeds the buffer with
-/// the cell's text, so committing writes that text back. This pins that, so the clear
-/// route below is not mistaken for a reachable one.
+/// The same two keys over a populated cell leave it exactly as it was. Under the old
+/// in-cell editor this rewrote the text it had just seeded the buffer with, marking the
+/// workbook dirty for a gesture that changed nothing; the pin survives because that is
+/// still the easy mistake to make.
 #[test]
-fn f2_then_enter_on_a_populated_cell_rewrites_the_same_text() {
+fn f2_then_enter_on_a_populated_cell_changes_nothing() {
     let mut app = OmaApp::default();
     app.wb
         .set_cell(CellRef::new(0, 0, 0), CellValue::Text("rent".into()));
     app.wb.clear_dirty();
     pass(&mut app, key(Key::F2));
-    let edit = app.grid.edit.as_ref().expect("F2 should start an edit");
-    assert_eq!(edit.buffer, "rent", "the buffer is seeded from the cell");
     pass(&mut app, key(Key::Enter));
     assert_eq!(
         app.wb.value_at(CellRef::new(0, 0, 0)),
         CellValue::Text("rent".into())
     );
     assert!(app.wb.active().used().is_some());
-}
-
-/// An empty buffer committed over a *populated* cell is a genuine clear. This route is
-/// not reachable from a keypress yet — there is no in-editor deletion, so `F2` always
-/// seeds a non-empty buffer from a populated cell — which is why it is pinned at the
-/// `commit_edit` seam rather than through the grid. When in-editor deletion lands, this
-/// is the path `F2`, select-all, `Delete`, `Enter` will take.
-#[test]
-fn commit_edit_clears_a_populated_cell() {
-    let mut app = OmaApp::default();
-    app.wb
-        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("rent".into()));
-    app.wb.clear_dirty();
-    app.grid.edit = Some(EditState {
-        active: CellRef::new(0, 0, 0),
-        buffer: String::new(),
-    });
-    commit_edit(&mut app.grid, &mut app.wb);
-    assert_eq!(app.wb.value_at(CellRef::new(0, 0, 0)), CellValue::Empty);
-    assert!(
-        app.wb.active().used().is_none(),
-        "the used range must shrink back with the last cell"
-    );
-    assert!(app.wb.dirty(), "clearing a populated cell is a change");
-}
-
-#[test]
-fn text_input_is_stored_verbatim_without_inference() {
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("00123"));
-    pass(&mut app, key(Key::Enter));
-    // Leading-zero identifiers must survive as text; this is the rule the CSV
-    // reader also enforces.
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Text("00123".into())
-    );
+    assert!(!app.wb.dirty());
 }
 
 // `parse_input` used to live here as `ui::grid::parse_input` and was tested through this
 // file. It is now `CellValue::from_text`, in the model, and is tested in `tests/cell.rs`
-// alongside the rule itself.
+// alongside the rule itself. Everything about typing into a cell moved to
+// `tests/formula_bar.rs`, which drives the one widget that types now.
 
-// --- Commit-key matrix: the whole table, so no cell of it can rot unnoticed. ---
-
-/// `Enter` moves down, so `Shift+Enter` has to move up.
-#[test]
-fn shift_enter_commits_the_edit_and_moves_up() {
-    let mut app = OmaApp::default();
-    pass(&mut app, key(Key::ArrowDown));
-    pass(&mut app, type_text("7"));
-    pass_with(
-        &mut app,
-        key(Key::Enter),
-        Modifiers {
-            shift: true,
-            ..Default::default()
-        },
-    );
-    assert!(app.grid.edit.is_none());
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 1, 0)),
-        CellValue::Number(7.0)
-    );
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
-}
-
-/// `Tab` moves right, so `Shift+Tab` has to move left. The unshifted arm has to be
-/// matched first in `show`, or `Tab` swallows the shifted case and moves right anyway.
-#[test]
-fn shift_tab_commits_the_edit_and_moves_left() {
-    let mut app = OmaApp::default();
-    pass(&mut app, key(Key::ArrowRight));
-    pass(&mut app, type_text("7"));
-    pass_with(
-        &mut app,
-        key(Key::Tab),
-        Modifiers {
-            shift: true,
-            ..Default::default()
-        },
-    );
-    assert!(app.grid.edit.is_none());
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 1)),
-        CellValue::Number(7.0)
-    );
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
-}
-
-/// Column A is the left edge: `Shift+Tab` there must stay put rather than underflow.
-#[test]
-fn shift_tab_from_the_first_column_stays_put() {
-    let mut app = OmaApp::default();
-    pass(&mut app, type_text("7"));
-    pass_with(
-        &mut app,
-        key(Key::Tab),
-        Modifiers {
-            shift: true,
-            ..Default::default()
-        },
-    );
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Number(7.0)
-    );
-    assert_eq!(app.grid.selection.active, CellRef::new(0, 0, 0));
-}
-
-/// Typing replaces the cell's content rather than appending to it. The other typing test
-/// only ever edits an empty cell, so without this the replace half is unverified.
-#[test]
-fn typing_over_a_non_empty_cell_replaces_its_content() {
-    let mut app = OmaApp::default();
-    app.wb
-        .set_cell(CellRef::new(0, 0, 0), CellValue::Text("original".into()));
-    pass(&mut app, type_text("5"));
-    pass(&mut app, key(Key::Enter));
-    assert_eq!(
-        app.wb.value_at(CellRef::new(0, 0, 0)),
-        CellValue::Number(5.0)
-    );
-}
-
-/// `Backspace` clears the selection when not editing, like `Delete`.
+/// `Backspace` clears the selection while the formula bar is not holding the keyboard,
+/// like `Delete`. While it *is* holding the keyboard the same key deletes a character
+/// instead, which `tests/formula_bar.rs` covers.
 #[test]
 fn backspace_clears_the_active_cell_and_marks_dirty() {
     let mut app = OmaApp::default();
@@ -702,15 +600,15 @@ fn delete_after_a_sheet_switch_clears_the_new_active_sheet_only() {
 }
 
 /// `remove_sheet` re-stamps every remaining sheet id, so a `CellRef` held in the selection
-/// or in an open editor silently changes which sheet it names. Re-qualifying is what stops
-/// that from becoming a write to the wrong sheet.
+/// or in the formula bar's target silently changes which sheet it names. Re-qualifying is
+/// what stops that from becoming a write to the wrong sheet.
 #[test]
 fn removing_a_sheet_requalifies_a_selection_naming_a_later_sheet() {
     let mut app = OmaApp::default();
     assert!(app.wb.add_sheet("Two"));
     assert!(app.wb.add_sheet("Three"));
-    // Put the selection and an open editor on the sheet that is about to be removed.
-    pass(&mut app, type_text("x"));
+    // Put the selection on the sheet that is about to be removed.
+    pass(&mut app, key(Key::ArrowDown));
     app.retarget_selection_to_active_sheet();
     assert_eq!(app.grid.selection.active.sheet, 2);
 
@@ -721,13 +619,13 @@ fn removing_a_sheet_requalifies_a_selection_naming_a_later_sheet() {
     pass(&mut app, Vec::new());
     assert_eq!(
         app.grid.selection.active,
-        CellRef::new(0, 0, 0),
-        "the selection must name the active sheet, not the old id"
+        CellRef::new(0, 1, 0),
+        "the selection must name the active sheet, not the old id, and keep its row"
     );
     assert_eq!(
-        app.grid.edit.as_ref().map(|e| e.active.sheet),
-        Some(0),
-        "an open editor must not commit into a re-stamped sheet id"
+        app.bar.target().sheet,
+        0,
+        "the formula bar must not write into a re-stamped sheet id"
     );
 }
 
@@ -776,22 +674,27 @@ fn a_single_click_selects_the_cell_under_the_pointer() {
     );
 }
 
+/// A double click selects like any other click. What it *also* means — hand the keyboard
+/// over — cannot travel through this decision, because there is nothing here to receive
+/// it: the field is somewhere else entirely. That half is raised by the grid from
+/// `Response::double_clicked` and is the one part of the pointer chain no headless test
+/// can reach.
 #[test]
-fn a_double_click_opens_an_editor_on_the_cell_under_the_pointer() {
+fn a_double_click_selects_the_cell_under_the_pointer() {
     assert_eq!(
         click_action(pos2(0.0, 0.0), pos2(150.0, 10.0), 0, false, true),
-        CellAction::Edit(CellRef::new(0, 0, 1))
+        CellAction::Select(CellRef::new(0, 0, 1))
     );
 }
 
 /// egui sets `CLICKED` on the frame of a double click too, so both flags can be true at
-/// once. `Edit` has to win, or the pair commits and selects and only opens an editor on
-/// its second click.
+/// once. Both have to answer the same way, or the second click of a pair would land
+/// somewhere else from the first.
 #[test]
-fn a_double_click_beats_the_single_click_it_also_reports() {
+fn a_double_click_selects_the_same_cell_the_click_it_also_reports_does() {
     assert_eq!(
         click_action(pos2(0.0, 0.0), pos2(150.0, 10.0), 0, true, true),
-        CellAction::Edit(CellRef::new(0, 0, 1))
+        CellAction::Select(CellRef::new(0, 0, 1))
     );
 }
 
