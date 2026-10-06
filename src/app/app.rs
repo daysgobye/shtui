@@ -96,6 +96,14 @@ impl OmaApp {
                 // on screen now *is* what is on disk, so it is not unsaved work. Left
                 // marked, the title would show the modified dot from the instant the file
                 // appeared, and the next `Ctrl+O` would ask to discard changes nobody made.
+                //
+                // Workbook-wide, and so wider than the open it follows: `clear_dirty` is a
+                // flag on the workbook while the open replaced only the *active* sheet. With
+                // one sheet there is no difference. The moment a second exists, opening a
+                // file marks the other sheet's unsaved edits clean, and the next save writes
+                // them to disk as though they were saved. Recorded here rather than fixed
+                // because sheet tabs do not exist yet; whoever adds them owns this, and the
+                // line to change is this one.
                 self.wb.clear_dirty();
                 self.error = None;
                 self.path = Some(path.to_owned());
@@ -129,9 +137,16 @@ impl OmaApp {
 
     /// Open the staged path, discarding whatever the workbook holds now.
     ///
-    /// The only route that replaces unsaved work, and reachable only once the user has
-    /// answered the question. A no-op with nothing staged, so there is no way to call it
-    /// into discarding a workbook by accident.
+    /// Reachable only once the user has answered the question, and a no-op with nothing
+    /// staged, so calling it cannot discard a workbook by accident.
+    ///
+    /// The invariant it takes part in — no route discards unsaved work without asking —
+    /// does not live here or in any type. It lives in one branch of [`OmaApp::open`],
+    /// which stages a chosen path when [`Workbook::dirty`] rather than opening it, and
+    /// this is the other end of that. [`OmaApp::load_sheet`] and [`OmaApp::open_csv`] are
+    /// both `pub` and both replace the active sheet without asking, so the rule is a
+    /// property of the call graph, not of the API: `load_sheet` stays `pub` because the
+    /// integration tests are external crates that build an `OmaApp` and drive it.
     pub fn confirm_open(&mut self) {
         if let Some(path) = self.open_dialog.take_staged() {
             self.open_csv(&path);

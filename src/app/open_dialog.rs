@@ -27,6 +27,20 @@
 //! Whether a chosen path may be opened at all is not this module's decision. It holds
 //! the path in `staged` until [`OpenDialog::take_staged`] is called, which is what gives
 //! the app somewhere to put the question asked before unsaved work is discarded.
+//!
+//! There is also no timeout and no way to cancel. The portal backend's worker blocks in
+//! `dbus_connection_read_write` with a `-1` timeout — meaning forever, in
+//! `xdg_desktop_portal/portal/mod.rs` — so a portal that never answers leaves
+//! `pending` set: [`OpenDialog::is_busy`] stays true and every later `Ctrl+O` is
+//! refused, while the app keeps drawing frames the whole time because `OmaApp::open`
+//! asks for them while `is_open`. The user is left with a window that accepts `Ctrl+O`
+//! and does nothing and a workbook they cannot save, and their way out is killing the
+//! process. Neither a deadline nor a cancel route exists here because neither is
+//! reachable through rfd's future — dropping the future would drop the worker thread
+//! with it, which is the cancel route, and it is not offered from the UI. This is
+//! recorded rather than fixed: it needs either a new dependency on the portal crates
+//! rfd wraps or an `abort` handle of our own, and until then it is the failure to watch
+//! for on a machine with a half-installed desktop portal.
 
 use std::future::Future;
 use std::path::PathBuf;
