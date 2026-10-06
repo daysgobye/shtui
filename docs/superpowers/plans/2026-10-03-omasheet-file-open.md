@@ -4,7 +4,7 @@
 
 **Goal:** The user can open a CSV or TSV file with `Ctrl+O`, see its name in the window title, and get a clear error when a file cannot be read.
 
-**Architecture:** `Ctrl+O` spawns an `rfd` async dialog and stores the returned future in `OmaApp`. Each frame `body` polls that future with a no-op waker; when it resolves, the path is read through the existing `io::csv_read` reader and loaded into the workbook. Nothing blocks the UI thread.
+**Architecture:** `Ctrl+O` spawns an `rfd` async dialog and stores the returned future in `OmaApp`. Each frame `body` polls that future with a no-op waker; when it resolves, the path is read through the existing `io::csv_read` reader and loaded into the workbook. Nothing blocks the UI thread. The portal call itself runs on a thread `rfd` spawns internally, so polling from the frame loop is a convenience for the *no-block* property, not a threading requirement — an earlier draft of this plan claimed otherwise and was wrong.
 
 **Tech Stack:** Rust 2024, `rfd = "=0.17.2"`, the existing `eframe`/`egui` 0.35.0 and `csv` 1.4.0.
 
@@ -24,7 +24,7 @@ Established by compiling and reading source:
 - Builds clean on rustc 1.94.0; clippy silent.
 - Default features are `xdg-portal` + `wayland`. **No GTK.** `org.freedesktop.portal.Desktop` is running on this session, so the portal backend can show a dialog.
 - `FileDialog::pick_file()` is **blocking** and would freeze the window for as long as the dialog is open.
-- `AsyncFileDialog::pick_file()` returns `impl Future<Output = Option<FileHandle>>`, and `FileHandle` derefs to the path. Polling it from the egui frame loop keeps us on the main thread, which is what the async backend requires.
+- `AsyncFileDialog::pick_file()` returns `impl Future<Output = Option<FileHandle>>`, and `FileHandle` derefs to the path. Behind it, rfd's `async_thread` spawns a worker and awaits a oneshot, so the blocking portal call is already off our thread. Polling from the frame loop is therefore not a main-thread requirement — it is simply how we avoid blocking.
 - Therefore: **spawn async, poll per frame.** Never call the blocking variant.
 
 ---
