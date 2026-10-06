@@ -1,5 +1,8 @@
-use eframe::egui::{self, Rect, UiBuilder, pos2};
+use std::path::PathBuf;
 
+use eframe::egui::{self, Key, Rect, Ui, UiBuilder, pos2};
+
+use crate::app::open_dialog::{OpenDialog, OpenOutcome};
 use crate::ui::formula_bar::{self, FormulaBar, Navigate};
 use crate::ui::grid::{self, GridState, Selection, Step};
 use crate::workbook::Workbook;
@@ -10,6 +13,10 @@ pub struct OmaApp {
     pub grid: GridState,
     pub bar: FormulaBar,
     pub error: Option<String>,
+    /// The file that is open, for the window title. `None` until the first successful
+    /// open, and left alone by a failed one.
+    pub path: Option<PathBuf>,
+    pub open_dialog: OpenDialog,
 }
 
 impl Default for OmaApp {
@@ -19,6 +26,8 @@ impl Default for OmaApp {
             grid: GridState::new(),
             bar: FormulaBar::new(),
             error: None,
+            path: None,
+            open_dialog: OpenDialog::new(),
         }
     }
 }
@@ -57,15 +66,160 @@ impl OmaApp {
         self.wb.replace_sheet(id, sheet);
     }
 
-    /// Read a CSV into the active sheet. A parse failure surfaces in `error`
-    /// rather than aborting, so a bad file never closes the window.
+    /// Read a CSV into the active sheet and record it as the file that is open.
+    ///
+    /// A parse failure surfaces in `error` rather than aborting, so a bad file never
+    /// closes the window, and it leaves `path` alone: a file that was never read is not
+    /// the file that is open, and the title should keep naming what is.
     pub fn open_csv(&mut self, path: &std::path::Path) {
         match crate::io::csv_read::read_csv_file(path) {
             Ok(sheet) => {
                 self.load_sheet(sheet);
+                // `replace_sheet` marks the workbook dirty because putting new contents
+                // into a workbook is a change. Opening a file is the other thing: what is
+                // on screen now *is* what is on disk, so it is not unsaved work. Left
+                // marked, the title would show the modified dot from the instant the file
+                // appeared, and the next `Ctrl+O` would ask to discard changes nobody made.
+                self.wb.clear_dirty();
                 self.error = None;
+                self.path = Some(path.to_owned());
             }
             Err(e) => self.error = Some(format!("could not read {}: {e}", path.display())),
+        }
+    }
+
+    /// What the window manager shows.
+    ///
+    /// The file's name rather than its path: a title bar is not somewhere to put a
+    /// ninety-character path, and the full path is one click away in the dialog the user
+    /// just came from. `Omasheet` before anything is open. The leading dot marks
+    /// [`Workbook::dirty`], which is workbook-wide — so it appears on an unsaved sheet
+    /// with no file behind it too, because it reports the workbook and not the file.
+    pub fn window_title(&self) -> String {
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            // A path with no file name in it — the filesystem root, or a trailing slash —
+            // would otherwise leave the title bar blank, which reads as a broken window.
+            .unwrap_or_else(|| "Omasheet".to_owned());
+        if self.wb.dirty() {
+            format!("\u{25cf} {name}")
+        } else {
+            name
+        }
+    }
+
+    /// Open the staged path, discarding whatever the workbook holds now.
+    ///
+    /// The only route that replaces unsaved work, and reachable only once the user has
+    /// answered the question. A no-op with nothing staged, so there is no way to call it
+    /// into discarding a workbook by accident.
+    pub fn confirm_open(&mut self) {
+        if let Some(path) = self.open_dialog.take_staged() {
+            self.open_csv(&path);
+        }
+    }
+
+    /// Leave the workbook alone and drop the question. The unsaved work stays unsaved,
+    /// which is what "keep editing" means.
+    pub fn decline_open(&mut self) {
+        self.open_dialog.take_staged();
+    }
+
+    /// `Ctrl+O`, the dialog's answer, and the title.
+    ///
+    /// Split out of [`OmaApp::body`] because it is the app's only input that is not the
+    /// grid or the bar, and because the ordering inside it is the whole of the open
+    /// route: poll, then spawn, then ask, then title.
+    fn open(&mut self, ui: &Ui) {
+        // The answer before the request. Applying last frame's outcome before reading
+        // this frame's chord is what lets a `Ctrl+O` land on the frame a dialog closes
+        // and open the next one, rather than being swallowed by the dialog that was
+        // already up when it was pressed.
+        match self.open_dialog.poll() {
+            None | Some(OpenOutcome::Cancelled) => {}
+            Some(OpenOutcome::Chosen(path)) => {
+                if self.wb.dirty() {
+                    // Held rather than opened: this is the app's first destructive act,
+                    // and a file chosen over unsaved work is a question, not a command.
+                    self.open_dialog.stage(path);
+                } else {
+                    self.open_csv(&path);
+                }
+            }
+        }
+
+        // Refused rather than queued while the route is busy. A second dialog over a
+        // question already on screen would leave two questions about one workbook with
+        // no way to answer the first.
+        // `key_pressed`, not the `pressed` the plan names: egui 0.35 spells it this way,
+        // and the rest of the app reads keys the same way, so the chord is not the one
+        // place in the app that has to know which of the two this egui version has.
+        let asked = ui.input(|i| i.key_pressed(Key::O) && i.modifiers.ctrl);
+        if asked && !self.open_dialog.is_busy() {
+            self.open_dialog.spawn();
+        }
+
+        self.show_open_confirmation(ui);
+
+        if self.open_dialog.is_open() {
+            // Nothing will wake egui when the portal answers. The dialog's future is
+            // polled with a no-op waker — see `open_dialog`'s module docs — and egui
+            // only draws a frame when something asks it to, so without this the answer
+            // would sit in the future until the user happened to move the mouse. It
+            // costs a repaint a frame for as long as the dialog is up, which is as long
+            // as the user is looking at the portal's window rather than this one.
+            ui.ctx().request_repaint();
+        }
+
+        // Pushed every frame rather than set once in `main`: the title changes when a
+        // file is opened and when the workbook becomes dirty, and neither happens on a
+        // frame the app gets to choose.
+        let title = self.window_title();
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Title(title));
+    }
+
+    /// The question asked before unsaved work is discarded.
+    ///
+    /// Two buttons and a window, which is all this needs: there is one question, it is
+    /// asked at most once, and a framework for dialogs would be a larger thing than the
+    /// feature it serves.
+    fn show_open_confirmation(&mut self, ui: &Ui) {
+        let Some(path) = self.open_dialog.staged() else {
+            return;
+        };
+        // The name rather than the path, for the same reason the title bar uses one.
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+
+        let mut discard = false;
+        let mut keep = false;
+        egui::Window::new("Unsaved changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ui.ctx(), |ui| {
+                ui.label(format!(
+                    "Opening {name} will discard the changes you have made."
+                ));
+                ui.horizontal(|ui| {
+                    discard = ui.button("Discard changes").clicked();
+                    keep = ui.button("Keep editing").clicked();
+                });
+            });
+
+        // Read after the window is drawn, so the frame the button lands on is the frame
+        // it is acted on. The window is an `Area`, not a focusable widget, so it takes
+        // no keyboard and typing goes on reaching the bar while the question is up.
+        if discard {
+            self.confirm_open();
+        } else if keep {
+            self.decline_open();
         }
     }
 
@@ -74,6 +228,10 @@ impl OmaApp {
         // Before anything reads the selection this frame, including the grid's own
         // navigation and painting. See `retarget_selection_to_active_sheet`.
         self.retarget_selection_to_active_sheet();
+        // Ahead of the error label and the grid, so a file opened this frame is the one
+        // that gets drawn on it rather than the one that was there when the frame began.
+        self.open(ui);
+
         // No title strip. "Omasheet" said nothing the window manager does not already say,
         // and a heading costs a row of vertical space the grid could use. The modified
         // marker lives in the formula bar's name box instead, which is where a spreadsheet
