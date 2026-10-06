@@ -17,6 +17,9 @@ pub struct OmaApp {
     /// open, and left alone by a failed one.
     pub path: Option<PathBuf>,
     pub open_dialog: OpenDialog,
+    /// The title last handed to the window manager, so an unchanged one is not pushed
+    /// again. `None` until the first frame has sent one.
+    pub last_title: Option<String>,
 }
 
 impl Default for OmaApp {
@@ -28,6 +31,7 @@ impl Default for OmaApp {
             error: None,
             path: None,
             open_dialog: OpenDialog::new(),
+            last_title: None,
         }
     }
 }
@@ -160,6 +164,14 @@ impl OmaApp {
                 } else {
                     self.open_csv(&path);
                 }
+                // The frame after this one, asked for here rather than left to the
+                // interval below. That interval only runs while a dialog is up, and this
+                // frame is the one that ends it, so nothing else would schedule a
+                // follow-up — and there is work a further frame settles: `body` reads the
+                // bar's height at the top to place the grid and `formula_bar::show`
+                // writes it at the bottom, so the field was laid out for the value it
+                // used to hold.
+                ui.ctx().request_repaint();
             }
         }
 
@@ -180,18 +192,30 @@ impl OmaApp {
             // Nothing will wake egui when the portal answers. The dialog's future is
             // polled with a no-op waker — see `open_dialog`'s module docs — and egui
             // only draws a frame when something asks it to, so without this the answer
-            // would sit in the future until the user happened to move the mouse. It
-            // costs a repaint a frame for as long as the dialog is up, which is as long
-            // as the user is looking at the portal's window rather than this one.
-            ui.ctx().request_repaint();
+            // would sit in the future until the user happened to move the mouse.
+            //
+            // `request_repaint_after`, not `request_repaint`: the latter means "draw
+            // another frame right after this one", so it is 60 Hz for as long as the user
+            // is looking at the portal's window, re-tessellating a grid that nobody is
+            // watching. The only thing a shorter interval buys is how long the answer can
+            // sit before it is noticed, and 50 ms is below the threshold at which that is
+            // visible — so twenty polls a second against sixty, for the same result.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
         }
 
-        // Pushed every frame rather than set once in `main`: the title changes when a
+        // Pushed when it changes rather than set once in `main`: the title changes when a
         // file is opened and when the workbook becomes dirty, and neither happens on a
-        // frame the app gets to choose.
+        // frame the app gets to choose. Compared against the last one pushed because a
+        // `ViewportCommand::Title` is a message to the compositor, and one per frame for
+        // as long as the window is open — the same sixty a second as above — to say
+        // something that did not change.
         let title = self.window_title();
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if self.last_title.as_deref() != Some(title.as_str()) {
+            self.last_title = Some(title.clone());
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
     }
 
     /// The question asked before unsaved work is discarded.
