@@ -10,6 +10,7 @@ eframe = "=0.35.0"
 egui = "=0.35.0"
 csv = "=1.4.0"
 rfd = "=0.17.2"
+log = "=0.4.34"
 
 [profile.dev]
 opt-level = 1
