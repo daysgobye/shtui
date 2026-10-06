@@ -30,17 +30,26 @@
 //!
 //! There is also no timeout and no way to cancel. The portal backend's worker blocks in
 //! `dbus_connection_read_write` with a `-1` timeout — meaning forever, in
-//! `xdg_desktop_portal/portal/mod.rs` — so a portal that never answers leaves
+//! `xdg_desktop_portal/portal/mod.rs:131` — so a portal that never answers leaves
 //! `pending` set: [`OpenDialog::is_busy`] stays true and every later `Ctrl+O` is
 //! refused, while the app keeps drawing frames the whole time because `OmaApp::open`
-//! asks for them while `is_open`. The user is left with a window that accepts `Ctrl+O`
-//! and does nothing and a workbook they cannot save, and their way out is killing the
-//! process. Neither a deadline nor a cancel route exists here because neither is
-//! reachable through rfd's future — dropping the future would drop the worker thread
-//! with it, which is the cancel route, and it is not offered from the UI. This is
-//! recorded rather than fixed: it needs either a new dependency on the portal crates
-//! rfd wraps or an `abort` handle of our own, and until then it is the failure to watch
-//! for on a machine with a half-installed desktop portal.
+//! asks for them while `is_open`. What that costs today is a refused `Ctrl+O` and an
+//! open route that stays busy until the process ends; there is no save route in this
+//! tree yet, so nothing else is lost, and when one lands this will also strand the work
+//! a user cannot write down. Their way out is killing the process.
+//!
+//! Recorded rather than fixed, but recorded accurately, because the shape of the fix is
+//! not what an earlier version of this note said. A deadline *is* reachable through
+//! rfd's future and needs no new dependency and no abort handle: `OpenDialog::poll`
+//! owns `pending`, so dropping it on a deadline frees the route immediately. What that
+//! costs is one leaked thread per timeout, because rfd starts the portal work detached
+//! — `std::thread::spawn(move || { tx.send(f()).ok(); })` in
+//! `xdg_desktop_portal.rs:28` — so the worker outlives the future, stays blocked in
+//! dbus, and its later `tx.send` fails silently once the receiver is dropped. So the
+//! trade-off to weigh is a wedged portal answering into the void instead of occupying
+//! the only open route, plus a bounded way to say "never mind" from the UI, against a
+//! thread that never returns. Until that is chosen, this is the failure to watch for on
+//! a machine with a half-installed desktop portal.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -191,8 +200,16 @@ impl OpenDialog {
         self.staged.as_deref()
     }
 
-    /// Take the staged path, if there is one. The only route by which a chosen path
-    /// reaches the reader.
+    /// Take the staged path, if there is one.
+    ///
+    /// One of the two routes a chosen path takes to the reader, not the only one: a clean
+    /// workbook is opened without anything being staged, which is what stops the question
+    /// appearing on every open. What this is the route for is the other case — a path held
+    /// while the user answers the question about unsaved work.
+    ///
+    /// The rule that nothing discards unsaved work without asking does not live here. It
+    /// lives in one branch of `OmaApp::open`, which stages a chosen path when the workbook
+    /// is dirty instead of opening it, and this is the other end of that.
     pub fn take_staged(&mut self) -> Option<PathBuf> {
         self.staged.take()
     }

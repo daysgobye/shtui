@@ -65,6 +65,13 @@ impl OmaApp {
 
     /// Replace the active sheet's contents, preserving its identity so that
     /// selection and scroll position stay meaningful.
+    ///
+    /// Not the route an open takes: [`OmaApp::open_csv`] puts a read file here and then
+    /// reloads the bar, clears the dirty flag and records the path around it, and this
+    /// function does none of that. It stays `pub` because the integration tests are an
+    /// external crate that builds an `OmaApp` and drives it. When sheet tabs land, whoever
+    /// adds them owns the fact that an open only replaces the *active* sheet while
+    /// [`OmaApp::open_csv`] clears dirty for the whole workbook — see the comment there.
     pub fn load_sheet(&mut self, sheet: Sheet) {
         let id = self.wb.active_id();
         self.wb.replace_sheet(id, sheet);
@@ -214,7 +221,18 @@ impl OmaApp {
             // is looking at the portal's window, re-tessellating a grid that nobody is
             // watching. The only thing a shorter interval buys is how long the answer can
             // sit before it is noticed, and 50 ms is below the threshold at which that is
-            // visible — so twenty polls a second against sixty, for the same result.
+            // visible.
+            //
+            // Which is not the interval that gets used: egui subtracts one predicted
+            // frame time from a non-zero `request_repaint_after` so the target is less
+            // likely to be overshot (`Context::request_repaint_after`, context.rs:148),
+            // and `predicted_dt` defaults to 1/60 s. So the 50 ms asked for here lands as
+            // 33.3 ms — about 30 Hz against the 60 a bare `request_repaint` would give.
+            // An immediate request from anywhere else still outranks it, and the grid's
+            // scrollbars fading in are one: `animate_bool_responsive` on a bar that has
+            // just appeared asks for a frame of its own for as long as it is animating
+            // (`ScrollArea::show`, scroll_area.rs:1262). Once that settles the interval is
+            // what egui gets, which is what `tests/open_file.rs` asserts.
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -223,7 +241,7 @@ impl OmaApp {
         // file is opened and when the workbook becomes dirty, and neither happens on a
         // frame the app gets to choose. Compared against the last one pushed because a
         // `ViewportCommand::Title` is a message to the compositor, and one per frame for
-        // as long as the window is open — the same sixty a second as above — to say
+        // as long as the window is open — sixty a second, and every one of them saying
         // something that did not change.
         let title = self.window_title();
         if self.last_title.as_deref() != Some(title.as_str()) {
