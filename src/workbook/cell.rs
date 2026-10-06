@@ -211,6 +211,37 @@ impl CellValue {
         }
     }
 
+    /// The value as it is written to a file: the raw text a reader will turn back
+    /// into this value.
+    ///
+    /// Not [`CellValue::to_display_string`], and not the cell's formatted form. A
+    /// `NumberFormat` that groups thousands renders `1234.5` as `1,234.50`, and
+    /// `infer_number` rejects that — so a writer using the display form would turn
+    /// every saved number into text, silently, on every save. This is the one
+    /// representation that survives [`CellValue::from_text`].
+    ///
+    /// `Bool` and `Error` are unreachable today: nothing constructs them —
+    /// `from_text` yields only `Empty`, `Number` or `Text`, and they appear only in
+    /// the two display methods above. They are handled rather than left to a `_` arm
+    /// so the match stays total when formulas arrive, and so no round trip is claimed
+    /// for them now: a `TRUE` written out reads back as text, because `from_text` has
+    /// no boolean rule to give it another meaning.
+    pub fn to_storage_string(&self) -> String {
+        match self {
+            CellValue::Empty => String::new(),
+            CellValue::Number(n) => format_general(*n),
+            CellValue::Text(t) => t.clone(),
+            CellValue::Bool(b) => {
+                if *b {
+                    "TRUE".to_owned()
+                } else {
+                    "FALSE".to_owned()
+                }
+            }
+            CellValue::Error(e) => e.as_str().to_owned(),
+        }
+    }
+
     /// The value as stored in the formula bar: numbers and booleans as typed,
     /// text verbatim. Used to seed the editor without destroying formatting.
     pub fn to_input_string(&self) -> String {
