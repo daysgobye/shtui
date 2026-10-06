@@ -456,6 +456,106 @@ fn a_clean_workbook_opens_without_asking() {
     assert!(!s.app.open_dialog.is_staged());
 }
 
+// --- The bar across an open ---
+
+/// Type into A1, open a file over the top, and answer the question.
+fn open_over_a_typed_cell(s: &mut Sheet, name: &str) -> Fixture {
+    let file = Fixture::new(name, "Name,Value\nRent,1200\n");
+    type_into(s, "rent");
+    assert_eq!(
+        s.app.bar.text(),
+        "rent",
+        "precondition: the field holds what was typed"
+    );
+    assert_eq!(s.app.bar.target(), A1, "precondition: bound to A1");
+
+    choose(s, &file.path);
+    s.pass(Vec::new());
+    assert!(
+        s.app.open_dialog.is_staged(),
+        "precondition: unsaved work was asked about rather than discarded"
+    );
+    s.app.confirm_open();
+    s.pass(Vec::new());
+    file
+}
+
+/// The field must be reloaded by the open itself.
+///
+/// `formula_bar::show` reloads when the `CellRef` it is bound to changes, or when it is
+/// untouched — and neither is true across an open. `replace_sheet` keeps the sheet id,
+/// the selection keeps its row and column, and the workbook is dirty precisely because
+/// the user typed, which is what leaves the field `touched`. So the gate cannot see this
+/// event, and the sequence below is four keystrokes from a corrupt file: the grid shows
+/// `Name` and the field shows `rent`, and the next `Esc` or character writes `rent`
+/// over the header of the file that was just opened.
+#[test]
+fn opening_a_file_reloads_the_formula_bar() {
+    let mut s = Sheet::new();
+    let _file = open_over_a_typed_cell(&mut s, "bar-reload.csv");
+
+    assert_eq!(
+        s.app.bar.text(),
+        "Name",
+        "the field must show the cell the open wrote, not what was being typed"
+    );
+    assert_eq!(
+        s.app.bar.target(),
+        A1,
+        "the open kept the selection, so the field stays on the cell it was on"
+    );
+    assert!(
+        !s.app.wb.dirty(),
+        "an opened file matches what is on disk and is not unsaved work"
+    );
+}
+
+/// `Esc` after an open must not put the old buffer back.
+///
+/// The bar's `Esc` writes `bar.original` into the bound cell. Before the fix, `original`
+/// was still the value the field held *before* the edit that had already been written to
+/// the cell — the empty string — so a single keypress cleared the opened file's header
+/// and the title flipped to `●` after having claimed to be clean.
+#[test]
+fn escape_after_an_open_leaves_the_opened_file_alone() {
+    let mut s = Sheet::new();
+    let _file = open_over_a_typed_cell(&mut s, "bar-escape.csv");
+
+    s.pass(key(Key::Escape));
+
+    assert_eq!(s.app.bar.text(), "Name");
+    assert_eq!(
+        s.value(A1),
+        CellValue::Text("Name".to_owned()),
+        "Esc must not restore what was in the field before the file was opened"
+    );
+    assert!(
+        !s.app.wb.dirty(),
+        "an Esc that changes nothing must not claim the workbook is edited"
+    );
+}
+
+/// The other half of the same fault: a keystroke after the open must edit the file's
+/// value rather than continue the buffer that was being typed when it arrived.
+#[test]
+fn typing_after_an_open_edits_the_files_value() {
+    let mut s = Sheet::new();
+    let _file = open_over_a_typed_cell(&mut s, "bar-typed.csv");
+
+    type_into(&mut s, "!");
+
+    assert_eq!(
+        s.value(A1),
+        CellValue::Text("Name!".to_owned()),
+        "the character has to land on the cell the open put there"
+    );
+    assert_eq!(
+        s.value(CellRef::new(0, 0, 1)),
+        CellValue::Text("Value".to_owned()),
+        "the character must not have moved the selection and landed in the next column"
+    );
+}
+
 // --- The title ---
 
 /// Before anything is open the window says what it is.

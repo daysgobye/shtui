@@ -75,6 +75,18 @@ impl OmaApp {
         match crate::io::csv_read::read_csv_file(path) {
             Ok(sheet) => {
                 self.load_sheet(sheet);
+                // The field has to be loaded here, because nothing downstream can see
+                // that the open happened. `formula_bar::show`'s reload gate fires on a
+                // changed `CellRef` or on an untouched field, and neither is true across
+                // an open: `replace_sheet` keeps the sheet id, the selection keeps its row
+                // and column, and a workbook dirty enough to have been asked about is dirty
+                // because the user typed — which is exactly the state that leaves `touched`
+                // set. So the gate stays shut and a half-typed value sits in the field over
+                // a cell that has just changed underneath it, where the next `Esc` writes it
+                // back (`Esc` restores `original`) or the next keystroke appends to it. Both
+                // land in the file the user just opened. `load_from` touches no focus state,
+                // so the caret survives this.
+                self.bar.load_from(&self.wb, self.grid.selection.active);
                 // `replace_sheet` marks the workbook dirty because putting new contents
                 // into a workbook is a change. Opening a file is the other thing: what is
                 // on screen now *is* what is on disk, so it is not unsaved work. Left
