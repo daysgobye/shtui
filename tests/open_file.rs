@@ -10,10 +10,11 @@
 //! Two more things go unverified, for reasons this repo already accepts. `Context::run_ui`
 //! does not simulate clicks, so the confirmation's two *buttons* are never pressed by
 //! any test below — only the app methods they call are, which is the decision the
-//! buttons exist to make. And the window title reaches the window manager through a
-//! viewport command that has no viewport to arrive at in a headless run, so what is
-//! asserted is the string [`omasheet::app::app::OmaApp::window_title`] produces rather
-//! than the title bar that would show it.
+//! buttons exist to make. And the window title is asserted as the string
+//! [`omasheet::app::app::OmaApp::window_title`] produces *and* as the viewport command
+//! that carries it: `run_ui` returns a `FullOutput` whose
+//! `viewport_output[&ViewportId::ROOT]` holds the commands and the repaint delay, so both
+//! are observable here.
 //!
 //! ## The one rule this file has to keep
 //!
@@ -24,7 +25,8 @@
 //! this file was being written. So the tests below either press `Ctrl+O` and stop, or
 //! press it against a future the test supplied, which the app refuses to replace.
 
-use egui::{Event, Key, Modifiers, RawInput, Rect, pos2, vec2};
+use egui::ViewportOutput;
+use egui::{Event, Key, Modifiers, RawInput, Rect, ViewportCommand, pos2, vec2};
 use omasheet::app::app::OmaApp;
 use omasheet::workbook::cell::{CellRef, CellValue};
 
@@ -116,11 +118,11 @@ impl Sheet {
         s
     }
 
-    fn pass(&mut self, events: Vec<Event>) {
-        self.pass_with(events, Modifiers::default());
+    fn pass(&mut self, events: Vec<Event>) -> ViewportOutput {
+        self.pass_with(events, Modifiers::default())
     }
 
-    fn pass_with(&mut self, events: Vec<Event>, modifiers: Modifiers) {
+    fn pass_with(&mut self, events: Vec<Event>, modifiers: Modifiers) -> ViewportOutput {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 700.0))),
             events,
@@ -128,7 +130,13 @@ impl Sheet {
             ..Default::default()
         };
         let Sheet { ctx, app, .. } = self;
-        let _ = ctx.run_ui(input, |ui| app.body(ui));
+        let full = ctx.run_ui(input, |ui| app.body(ui));
+        // The root viewport's half of it. `FullOutput::viewport_output` carries what the
+        // frame told the window manager — the commands it was sent and when it was asked to
+        // redraw — and there is exactly one viewport in a headless run, so the root is the
+        // whole of it. Cloned rather than moved so the harness can keep returning
+        // `ViewportOutput` from a pass the caller may only read a field of.
+        full.viewport_output[&egui::ViewportId::ROOT].clone()
     }
 
     /// `Ctrl+O`.
@@ -136,12 +144,30 @@ impl Sheet {
     /// The one gesture in this file that can reach the portal, and it does not: the
     /// future this leaves pending is not polled until the next pass. See the rule in
     /// the file's docs — a test that presses this must not pass again.
-    fn ctrl_o(&mut self) {
-        self.pass_with(chord(Key::O), ctrl());
+    fn ctrl_o(&mut self) -> ViewportOutput {
+        self.pass_with(chord(Key::O), ctrl())
     }
 
     fn value(&self, at: CellRef) -> CellValue {
         self.app.wb.value_at(at)
+    }
+
+    /// Pass frames until nothing is asking for another one.
+    ///
+    /// The grid's scrollbars fade in over `Style::animation_time` — 0.2 s by default, so
+    /// twelve passes at egui's predicted 1/60 s — and a running animation asks for a
+    /// repaint every frame. That repaint is immediate, and an immediate request outranks a
+    /// delayed one, so until the fade finishes `repaint_delay` reads zero and the frame
+    /// says nothing about *when* a later request would fire. Stopping at the first settled
+    /// frame rather than counting passes keeps this correct if egui changes the timing;
+    /// bounded so a version that never settles fails the test instead of hanging it.
+    fn settle(&mut self) {
+        for _ in 0..60 {
+            if self.pass(Vec::new()).repaint_delay == std::time::Duration::MAX {
+                return;
+            }
+        }
+        panic!("nothing asked for a repaint within 60 passes, so the frame never settles");
     }
 }
 
@@ -413,8 +439,9 @@ fn declining_the_open_keeps_the_workbook() {
 }
 
 /// A question with nothing staged behind it cannot open anything, so neither answer can
-/// discard anything: there is no route to `open_csv` that does not go through the
-/// staged path.
+/// discard anything: `take_staged` yields nothing, and the rule that a chosen path is
+/// opened without asking or not at all lives in the `dirty` branch of `OmaApp::open`
+/// rather than here.
 #[test]
 fn answering_with_nothing_staged_opens_nothing() {
     let mut s = Sheet::new();
@@ -624,4 +651,105 @@ fn a_path_with_no_file_name_falls_back_to_the_app_name() {
     let mut s = Sheet::new();
     s.app.path = Some(std::path::PathBuf::from("/"));
     assert_eq!(s.app.window_title(), "Omasheet");
+}
+
+/// The titles this frame sent the window manager, in order.
+fn titles_sent(output: &ViewportOutput) -> Vec<&str> {
+    output
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            ViewportCommand::Title(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The title is pushed when it changes, and not again while it does not.
+///
+/// `last_title` is a memo, and a memo rots silently: a window that stops being renamed
+/// looks exactly like a window with nothing to rename. The cost of getting this wrong is
+/// one `ViewportCommand::Title` per frame to the compositor, sixty a second, to say
+/// something that did not change — and the cost of memoising without checking is the title
+/// never arriving at all. Both look fine on screen until someone resizes the window.
+#[test]
+fn the_title_is_pushed_when_it_changes_and_only_then() {
+    let mut s = Sheet::new();
+    let file = Fixture::new("pushed.csv", "a\n");
+
+    assert!(
+        titles_sent(&s.pass(Vec::new())).is_empty(),
+        "the first frame already sent `Omasheet`, so an unchanged title must not be sent again"
+    );
+
+    choose(&mut s, &file.path);
+    assert_eq!(
+        titles_sent(&s.pass(Vec::new())),
+        vec![file.name()],
+        "opening a file changes the title, so the change has to reach the window manager"
+    );
+
+    assert!(
+        titles_sent(&s.pass(Vec::new())).is_empty(),
+        "the title is the same string as last frame, so it must not be sent again"
+    );
+
+    // A change the app does not choose the frame for: the keystroke dirties the workbook
+    // below the title's branch, so the dirtiness reaches the title on the next frame.
+    type_into(&mut s, "x");
+    assert_eq!(
+        titles_sent(&s.pass(Vec::new())),
+        vec![format!("\u{25cf} {}", file.name())],
+        "becoming dirty changes the title, and that change has to be sent too"
+    );
+}
+
+/// The repaint interval exists while a dialog is up and is gone once it is not.
+///
+/// The interval is the only thing that draws frames while the dialog is open — the
+/// future is polled with a no-op waker, so nothing wakes egui when the portal answers.
+/// Without it the answer sits in the future until the user happens to move the mouse;
+/// with it left in place after the dialog closes the app re-tessellates a grid nobody is
+/// watching at 30 Hz for the rest of the session.
+#[test]
+fn the_polling_interval_exists_only_while_a_dialog_is_up() {
+    let mut s = Sheet::new();
+    let file = Fixture::new("polled.csv", "a\n");
+    // Resolves on the second poll, so the frame that asks for the interval is the last one
+    // with a dialog up and the frame after the dialog has gone is the one that must stop
+    // asking. Not the portal — a future this test supplies, so nothing here can raise a
+    // real dialog.
+    s.settle();
+    s.app
+        .open_dialog
+        .set_pending(OnNthPoll::new(2, file.path.clone()));
+
+    let while_open = s.pass(Vec::new()).repaint_delay;
+    assert!(
+        while_open > std::time::Duration::ZERO,
+        "a dialog is up and nothing else will wake egui: {while_open:?}"
+    );
+    // The app asks for 50 ms and egui takes one predicted frame time off a non-zero
+    // `request_repaint_after` (1/60 s by default), so what arrives is below what was asked
+    // for. Asserting the ceiling rather than the exact value keeps this test about the
+    // interval existing and not about egui's arithmetic, which the comment in `open` is
+    // the place to track.
+    assert!(
+        while_open < std::time::Duration::from_millis(50),
+        "the interval must be the one asked for, less egui's predicted frame time: {while_open:?}"
+    );
+    assert!(s.app.open_dialog.is_open(), "precondition: still pending");
+
+    // Resolving the frame asks for a repaint of its own — there is work a further frame
+    // settles — and egui serves that immediate request on the next pass as well, so it
+    // takes two frames after the dialog closes before the output can report that nothing
+    // is scheduled. What is being pinned is that the interval does not come back: once
+    // `is_open` is false nothing asks for a delayed repaint again.
+    s.pass(Vec::new());
+    s.pass(Vec::new());
+    assert_eq!(
+        s.pass(Vec::new()).repaint_delay,
+        std::time::Duration::MAX,
+        "nothing asked for another frame, so the interval must be gone rather than left running"
+    );
 }
