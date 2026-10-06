@@ -10,9 +10,13 @@
 //!
 //! The sink is a file beside the executable, or stderr when no file could be opened:
 //! stderr is what `cargo run` already shows, and it keeps working when the executable
-//! lives somewhere read-only. Nothing beyond the facade — a missing portal is a
-//! diagnosability problem, not a feature, and the only thing a logger has to do here is
-//! make another crate's messages land somewhere.
+//! lives somewhere read-only. The file is created by the first record rather than by
+//! [`install`], so a launch with nothing to report leaves nothing behind — an empty log
+//! appearing beside the executable on every first run reads as evidence that something
+//! failed, and there is no rotation, so a file that always exists only ever grows.
+//! Nothing beyond the facade — a missing portal is a diagnosability problem, not a
+//! feature, and the only thing a logger has to do here is make another crate's messages
+//! land somewhere.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -37,22 +41,17 @@ pub fn log_path() -> Option<PathBuf> {
 ///
 /// `false` means a logger was already installed, which is not a failure worth stopping
 /// for: [`install`] is called once from `main`, and the answer is only there so the
-/// caller can say so rather than leave a silent gap where the log should be.
+/// caller can say so rather than leave a silent gap where the log should be. Nothing is
+/// opened here — see [`Sink`], which creates the file on the first record.
 pub fn install() -> bool {
-    let path = log_path();
-    let file = path.as_ref().and_then(|p| {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)
-            // Reported on stderr rather than swallowed: this is the one case where the
-            // fallback matters to whoever is about to read a log, and at this point
-            // there is no logger yet to say it with.
-            .inspect_err(|e| eprintln!("omasheet: {}: {e}", p.display()))
-            .ok()
-    });
+    let sink = match log_path() {
+        Some(path) => Sink::Pending(path),
+        // No path to log to, so stderr from the first record. Reported by nobody: there
+        // is no log to report it in, and the records themselves are on stderr already.
+        None => Sink::Stderr,
+    };
     if log::set_boxed_logger(Box::new(FileLogger {
-        file: Mutex::new(file),
+        sink: Mutex::new(sink),
     }))
     .is_ok()
     {
@@ -65,12 +64,62 @@ pub fn install() -> bool {
     }
 }
 
+/// Where records go, before the first one has decided.
+enum Sink {
+    /// A file that does not exist yet. See the module docs for why it is not created
+    /// eagerly.
+    Pending(PathBuf),
+    /// The file, open.
+    File(File),
+    /// stderr, because there was no file to write to or the file could not be opened.
+    Stderr,
+}
+
+impl Sink {
+    /// Move to [`Sink::File`] on the first record, and stay there.
+    ///
+    /// The failure is remembered rather than retried, so a read-only directory is
+    /// reported once instead of on every record for the rest of the session.
+    fn open(&mut self) {
+        if !matches!(self, Sink::Pending(_)) {
+            return;
+        }
+        let pending = std::mem::replace(self, Sink::Stderr);
+        if let Sink::Pending(path) = pending {
+            *self = match open_log_file(&path) {
+                Ok(file) => Sink::File(file),
+                Err(e) => {
+                    // Reported on stderr, which is where the records are going instead, and
+                    // there is no logger yet to say it with.
+                    eprintln!("omasheet: {}: {e}", path.display());
+                    Sink::Stderr
+                }
+            };
+        }
+    }
+
+    /// Append one line, and return the result so a caller holding no logger can ignore it
+    /// knowingly rather than by accident.
+    fn write_line(&mut self, line: &str) -> io::Result<()> {
+        self.open();
+        match self {
+            Sink::File(file) => file.write_all(line.as_bytes()),
+            _ => io::stderr().write_all(line.as_bytes()),
+        }
+    }
+}
+
+/// Open the log file for appending, creating it if this is the first run that needed one.
+fn open_log_file(path: &std::path::Path) -> io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
 /// Appends each record to the file, or to stderr when there is no file.
 struct FileLogger {
     /// `Mutex` rather than `RefCell` because `log::set_boxed_logger` wants `Send + Sync`
     /// and rfd logs from its portal thread as well as the main one. The lock is taken
     /// for the length of one `write_all`.
-    file: Mutex<Option<File>>,
+    sink: Mutex<Sink>,
 }
 
 impl log::Log for FileLogger {
@@ -98,22 +147,20 @@ impl log::Log for FileLogger {
         // Recovered rather than propagated: a panic in whatever logged should not silence
         // the next line, and `log` has nowhere for a poison error to go anyway.
         let mut guard = self
-            .file
+            .sink
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let written = match guard.as_mut() {
-            Some(file) => file.write_all(line.as_bytes()),
-            None => io::stderr().write_all(line.as_bytes()),
-        };
-        let _ = written;
+        let _ = guard.write_line(&line);
     }
 
     fn flush(&self) {
-        let guard = self
-            .file
+        let mut guard = self
+            .sink
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(mut file) = guard.as_ref() {
+        // Deliberately not `Sink::open`: flushing must not create the file, or every
+        // launch would leave one behind again.
+        if let Sink::File(file) = &mut *guard {
             let _ = file.flush();
         }
     }
