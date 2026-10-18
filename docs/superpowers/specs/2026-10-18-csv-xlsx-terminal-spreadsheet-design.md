@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-This design was approved in chat, then revised from the user's written-spec feedback. It is awaiting review of this revision. It defines a compiled, fast-starting terminal spreadsheet for practical CSV and Excel workbook work. Repository code and prior sessions were not inspected.
+This design was approved in chat and in the written-spec review. It defines a compiled, fast-starting terminal spreadsheet for practical CSV and Excel workbook work. Repository code and prior sessions were not inspected.
 
 ## Goals
 
