@@ -17,6 +17,7 @@ func workbookFromExcelize(file *excelize.File, path string, format Format) (*Wor
 			return nil, fmt.Errorf("read sheet %q from %q: %w", sheetName, path, err)
 		}
 		sheet := Sheet{Name: sheetName, Rows: len(rows), Cells: make(map[Coord]Cell), ColumnWidths: make(map[int]float64)}
+		styleCache := make(map[int]CellStyle)
 		for rowIndex, row := range rows {
 			if len(row) > sheet.Cols {
 				sheet.Cols = len(row)
@@ -30,28 +31,138 @@ func workbookFromExcelize(file *excelize.File, path string, format Format) (*Wor
 				if err != nil {
 					return nil, fmt.Errorf("read formula %s!%s: %w", sheetName, cellName, err)
 				}
+				styleID, err := file.GetCellStyle(sheetName, cellName)
+				if err != nil {
+					return nil, fmt.Errorf("read style %s!%s: %w", sheetName, cellName, err)
+				}
+				cellStyle, cached := styleCache[styleID]
+				if !cached {
+					style, err := file.GetStyle(styleID)
+					if err != nil {
+						return nil, fmt.Errorf("read style definition %s!%s: %w", sheetName, cellName, err)
+					}
+					cellStyle = styleFromExcelize(style)
+					styleCache[styleID] = cellStyle
+				}
 				input := result
 				state := Literal
 				if formula != "" {
 					input = "=" + formula
 					state = Stale
 				}
-				if input == "" && result == "" {
+				cell := Cell{Input: input, Result: result, CalculationState: state, Style: cellStyle}
+				if input == "" && result == "" && !hasCellStyle(cell.Style) {
 					continue
 				}
-				sheet.Cells[Coord{Row: rowIndex, Col: colIndex}] = Cell{
-					Input:            input,
-					Result:           result,
-					CalculationState: state,
-				}
+				sheet.Cells[Coord{Row: rowIndex, Col: colIndex}] = cell
 			}
 		}
+		for col := range sheet.Cols {
+			columnName, err := excelize.ColumnNumberToName(col + 1)
+			if err != nil {
+				return nil, fmt.Errorf("address column %d in sheet %q: %w", col, sheetName, err)
+			}
+			width, err := file.GetColWidth(sheetName, columnName)
+			if err != nil {
+				return nil, fmt.Errorf("read width %s!%s: %w", sheetName, columnName, err)
+			}
+			sheet.ColumnWidths[col] = width
+		}
+		merges, err := file.GetMergeCells(sheetName, true)
+		if err != nil {
+			return nil, fmt.Errorf("read merged cells in sheet %q: %w", sheetName, err)
+		}
+		for _, merge := range merges {
+			start, startRow, err := excelize.CellNameToCoordinates(merge.GetStartAxis())
+			if err != nil {
+				return nil, fmt.Errorf("read merge start in sheet %q: %w", sheetName, err)
+			}
+			end, endRow, err := excelize.CellNameToCoordinates(merge.GetEndAxis())
+			if err != nil {
+				return nil, fmt.Errorf("read merge end in sheet %q: %w", sheetName, err)
+			}
+			sheet.Merges = append(sheet.Merges, CellRange{Start: Coord{Row: startRow - 1, Col: start - 1}, End: Coord{Row: endRow - 1, Col: end - 1}})
+			sheet.Rows = max(sheet.Rows, endRow)
+			sheet.Cols = max(sheet.Cols, end)
+		}
+		rules, err := loadConditionalRules(file, sheetName)
+		if err != nil {
+			return nil, fmt.Errorf("read conditional formats in sheet %q: %w", sheetName, err)
+		}
+		sheet.ConditionalRules = rules
 		workbook.Sheets = append(workbook.Sheets, sheet)
 	}
 	if len(workbook.Sheets) == 0 {
 		return nil, fmt.Errorf("workbook %q contains no worksheets", path)
 	}
 	return workbook, nil
+}
+
+func loadConditionalRules(file *excelize.File, sheetName string) ([]ConditionalRule, error) {
+	formats, err := file.GetConditionalFormats(sheetName)
+	if err != nil {
+		return nil, err
+	}
+	var rules []ConditionalRule
+	for reference, options := range formats {
+		selection, err := cellRangeFromExcelize(reference)
+		if err != nil {
+			continue
+		}
+		for _, option := range options {
+			operator, supported := conditionalOperator(option)
+			if !supported || option.Format == nil {
+				continue
+			}
+			style, err := file.GetConditionalStyle(*option.Format)
+			if err != nil {
+				return nil, err
+			}
+			converted := styleFromExcelize(style)
+			rule := ConditionalRule{Range: selection, Operator: operator, Value: option.Value, FillRGB: converted.FillRGB, FontRGB: converted.FontRGB}
+			if validateConditionalRule(rule) == nil {
+				rules = append(rules, rule)
+			}
+		}
+	}
+	return rules, nil
+}
+
+func conditionalOperator(option excelize.ConditionalFormatOptions) (RuleOperator, bool) {
+	criteria := strings.ToLower(strings.TrimSpace(option.Criteria))
+	switch {
+	case option.Type == "cell" && (criteria == ">" || criteria == "greater than"):
+		return GreaterThan, true
+	case option.Type == "cell" && (criteria == "<" || criteria == "less than"):
+		return LessThan, true
+	case option.Type == "cell" && (criteria == "==" || criteria == "=" || criteria == "equal to"):
+		return Equal, true
+	case option.Type == "blanks":
+		return Blank, true
+	case option.Type == "text" && criteria == "containing":
+		return TextContains, true
+	default:
+		return "", false
+	}
+}
+
+func cellRangeFromExcelize(reference string) (CellRange, error) {
+	parts := strings.Split(reference, ":")
+	if len(parts) == 1 {
+		parts = append(parts, parts[0])
+	}
+	if len(parts) != 2 {
+		return CellRange{}, fmt.Errorf("invalid cell range %q", reference)
+	}
+	startCol, startRow, err := excelize.CellNameToCoordinates(parts[0])
+	if err != nil {
+		return CellRange{}, err
+	}
+	endCol, endRow, err := excelize.CellNameToCoordinates(parts[1])
+	if err != nil {
+		return CellRange{}, err
+	}
+	return CellRange{Start: Coord{Row: startRow - 1, Col: startCol - 1}, End: Coord{Row: endRow - 1, Col: endCol - 1}}, nil
 }
 
 // SaveFile writes through a sibling temporary file and refuses package changes outside the safe allowlist.

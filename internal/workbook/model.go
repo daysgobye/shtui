@@ -63,13 +63,14 @@ type Cell struct {
 	Style            CellStyle
 }
 
-// Sheet stores sparse cell content and sheet-level metadata.
 type Sheet struct {
-	Name         string
-	Rows         int
-	Cols         int
-	Cells        map[Coord]Cell
-	ColumnWidths map[int]float64
+	Name             string
+	Rows             int
+	Cols             int
+	Cells            map[Coord]Cell
+	ColumnWidths     map[int]float64
+	Merges           []CellRange
+	ConditionalRules []ConditionalRule
 }
 
 // Workbook is the editable in-memory representation of a spreadsheet.
