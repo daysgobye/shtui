@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-This design is approved in chat and is awaiting review of this written specification. It defines a compiled, fast-starting terminal spreadsheet for practical CSV and Excel workbook work. Repository code and prior sessions were not inspected.
+This design was approved in chat, then revised from the user's written-spec feedback. It is awaiting review of this revision. It defines a compiled, fast-starting terminal spreadsheet for practical CSV and Excel workbook work. Repository code and prior sessions were not inspected.
 
 ## Goals
 
@@ -31,9 +31,15 @@ References: [Bubble Tea API](https://pkg.go.dev/github.com/charmbracelet/bubblet
 
 ## User interface and launch behavior
 
-Use a toolbar-first layout, selected from visual mockups: top-level File/Edit/View/Data/Format menus; visible undo/redo, insert-row/column, fill/font color, sort, and filter controls; name box and formula bar; central grid; sheet tabs; status bar with selection and dimensions. Keep the grid as the dominant surface. Support mouse selection, wheel scrolling, and drag-to-resize column boundaries, with keyboard navigation and shortcuts for the same core operations.
+Use a toolbar-first layout, selected from visual mockups: top-level File/Edit/View/Data/Format menus; visible undo/redo, insert-row/column, fill/font color, sort, and filter controls; name box and formula bar; central grid; sheet tabs; status bar with selection and dimensions. Keep the grid as the dominant surface. Support mouse selection, wheel scrolling, and drag-to-resize column boundaries, with keyboard navigation and shortcuts for the same core operations. Include a `Ctrl+P` command palette for searching and invoking actions. The toolbar is visible by default and can be hidden or restored from View or the command palette; the palette remains available while the toolbar is hidden.
 
 Launching with a path opens that workbook directly. Launching without a path shows an open/create screen. Do not add splash animations, network lookups, or background discovery before the usable screen.
+
+### Terminal theme and color selection
+
+Use the terminal's default foreground/background and ANSI theme colors for the application chrome; avoid painting a fixed background so the app fits both light and dark terminal themes. Render theme-color choices through ANSI palette slots.
+
+Cell fill, font, border, and conditional-format color menus show the terminal theme palette first, followed by a custom RGB/hex entry. Use 24-bit color for custom colors when supported; otherwise map to the nearest available terminal palette color. Store a concrete color in XLSX styles; when the terminal cannot report its configured ANSI RGB values, use a documented standard ANSI-to-RGB mapping for saved theme-color choices.
 
 ## File and workbook behavior
 
@@ -53,7 +59,7 @@ For all formats, save to a temporary sibling file and replace the original only 
 - Insert rows and columns.
 - Add, rename, and delete sheets.
 - Resize columns by dragging a header boundary.
-- Apply fill color, font color, bold, common number/date formats, and basic border presets.
+- Apply fill color, font color, bold, common number/date formats, and basic border presets. Color menus list terminal theme colors first, then custom RGB/hex input.
 - Merge/unmerge rectangular selections. Keep the top-left value. If another selected cell is nonempty, ask before discarding its value.
 - Sort a selected rectangular data range as a whole. When sorting from a cell or column, infer the contiguous data range; sort a single column in isolation only when the user explicitly requests it. Block sorting ranges containing merged cells.
 - Filter rows by column values without changing their underlying cell data.
@@ -80,6 +86,6 @@ Virtualize grid rendering: draw only visible cells and headers, while preserving
 
 ## Verification
 
-Use deterministic tests for formula results and dependency updates, range sorting, filtering without data mutation, merge confirmation semantics, conditional-format rule behavior, and save failure safety. Include fixture-based XLSX round trips for supported styles and representative unsupported features; compare reopened workbook content and package relationships rather than only checking that serialization returns no error.
+- Use deterministic tests for formula results and dependency updates, range sorting, filtering without data mutation, merge confirmation semantics, conditional-format rule behavior, command-palette access while the toolbar is hidden, theme palette ordering, custom color input, and save failure safety. Include fixture-based XLSX round trips for supported styles and representative unsupported features; compare reopened workbook content and package relationships rather than only checking that serialization returns no error.
 
-Smoke the real TUI: launch with and without a path, open/edit/save/reopen CSV and XLSX, exercise sheet tabs, formula recalculation, mouse selection, column resizing, and scrolling. Benchmark cold launch and a 25,000 × 20 sheet. A successful unit-test suite alone is not proof of the TUI or preservation behavior.
+- Smoke the real TUI: launch with and without a path, open/edit/save/reopen CSV and XLSX, exercise sheet tabs, formula recalculation, mouse selection, column resizing, toolbar hide/show, command-palette invocation, theme colors, custom colors, and scrolling. Benchmark cold launch and a 25,000 × 20 sheet. A successful unit-test suite alone is not proof of the TUI or preservation behavior.
