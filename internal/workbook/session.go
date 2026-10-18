@@ -16,6 +16,7 @@ type Session struct {
 	Format        Format
 	OriginalParts map[string][32]byte
 	file          *excelize.File
+	history       historyState
 }
 
 // OpenFile loads a CSV, XLSX, or XLSM workbook without reconstructing XLSX-family files.
