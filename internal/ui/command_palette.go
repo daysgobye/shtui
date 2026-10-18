@@ -29,6 +29,19 @@ var paletteCommands = []paletteCommand{
 	{ID: "font-color", Name: "Font color"},
 	{ID: "insert-row", Name: "Insert row"},
 	{ID: "insert-column", Name: "Insert column"},
+	{ID: "open-file", Name: "Open file"},
+	{ID: "new-csv", Name: "New CSV workbook"},
+	{ID: "new-xlsx", Name: "New XLSX workbook"},
+	{ID: "save", Name: "Save"},
+	{ID: "save-as", Name: "Save as"},
+	{ID: "sort", Name: "Sort by selected column"},
+	{ID: "filter", Name: "Filter selected column"},
+	{ID: "border", Name: "Apply bottom border"},
+	{ID: "merge", Name: "Merge selected cells"},
+	{ID: "unmerge", Name: "Unmerge selected cells"},
+	{ID: "toggle-bold", Name: "Toggle bold"},
+	{ID: "add-sheet", Name: "Add sheet"},
+	{ID: "conditional-format", Name: "Add conditional formatting"},
 }
 
 func (palette *CommandPalette) Show() {

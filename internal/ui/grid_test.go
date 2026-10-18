@@ -71,3 +71,16 @@ func TestHidingToolbarAddsOneGridRow(t *testing.T) {
 		t.Fatalf("grid height changed from %d to %d; hiding toolbar should add one row", withToolbar, model.Grid.Height)
 	}
 }
+
+func TestMouseDragSelectsRectangularRange(t *testing.T) {
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 60, 12)
+	sheet := &workbook.Sheet{Rows: 8, Cols: 8}
+	grid.HandleMouse(tea.MouseMsg(tea.MouseEvent{X: 5, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}), sheet)
+	grid.HandleMouse(tea.MouseMsg(tea.MouseEvent{X: 25, Y: 3, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}), sheet)
+	grid.HandleMouse(tea.MouseMsg(tea.MouseEvent{X: 25, Y: 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}), sheet)
+	want := workbook.CellRange{Start: workbook.Coord{Row: 0, Col: 0}, End: workbook.Coord{Row: 2, Col: 2}}
+	if grid.Selection != want {
+		t.Fatalf("drag selection = %#v, want %#v", grid.Selection, want)
+	}
+}

@@ -20,6 +20,28 @@ type Session struct {
 	history       historyState
 }
 
+// NewWorkbook creates an empty CSV or XLSX session for the no-path flow.
+func NewWorkbook(format Format) (*Session, error) {
+	switch format {
+	case CSV:
+		model := &Workbook{
+			Format: format,
+			Sheets: []Sheet{{Name: "Sheet1", Cells: make(map[Coord]Cell), ColumnWidths: make(map[int]float64)}},
+		}
+		return &Session{Workbook: model, Format: format}, nil
+	case XLSX:
+		file := excelize.NewFile()
+		model, err := workbookFromExcelize(file, "", format)
+		if err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		return &Session{Workbook: model, Format: format, file: file}, nil
+	default:
+		return nil, fmt.Errorf("cannot create a new workbook in format %s", format)
+	}
+}
+
 // OpenFile loads a CSV, XLSX, or XLSM workbook without reconstructing XLSX-family files.
 func OpenFile(path string) (*Session, error) {
 	format, err := formatForPath(path)

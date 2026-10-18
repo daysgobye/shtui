@@ -16,21 +16,24 @@ const (
 )
 
 type GridViewport struct {
-	OriginX        int
-	OriginY        int
-	Width          int
-	Height         int
-	RowHeaderWidth int
-	HeaderHeight   int
-	ScrollRow      int
-	ScrollCol      int
-	Selected       workbook.Coord
-	Selection      workbook.CellRange
-	ColumnWidths   map[int]int
+	OriginX           int
+	OriginY           int
+	Width             int
+	Height            int
+	RowHeaderWidth    int
+	HeaderHeight      int
+	ScrollRow         int
+	ScrollCol         int
+	Selected          workbook.Coord
+	Selection         workbook.CellRange
+	ColumnWidths      map[int]int
+	VisibleRowIndexes []int
 
-	resizingColumn int
-	resizeStartX   int
-	resizeStartW   int
+	resizingColumn  int
+	resizeStartX    int
+	resizeStartW    int
+	selectionAnchor workbook.Coord
+	selecting       bool
 }
 
 func NewGridViewport() GridViewport {
@@ -66,6 +69,12 @@ func (grid *GridViewport) CellAt(screenX, screenY int, sheet *workbook.Sheet) (w
 		col++
 	}
 	row := grid.ScrollRow + y - grid.HeaderHeight
+	if len(grid.VisibleRowIndexes) > 0 {
+		if row < 0 || row >= len(grid.VisibleRowIndexes) {
+			return workbook.Coord{}, false
+		}
+		row = grid.VisibleRowIndexes[row]
+	}
 	return workbook.Coord{Row: row, Col: col}, true
 }
 
@@ -96,6 +105,19 @@ func (grid *GridViewport) HandleMouse(message tea.MouseMsg, sheet *workbook.Shee
 		}
 		return 0, 0, false
 	}
+	if grid.selecting && (event.Action == tea.MouseActionMotion || event.Action == tea.MouseActionRelease) {
+		if coord, ok := grid.CellAt(event.X, event.Y, sheet); ok {
+			grid.Selected = coord
+			grid.Selection = workbook.CellRange{
+				Start: workbook.Coord{Row: min(grid.selectionAnchor.Row, coord.Row), Col: min(grid.selectionAnchor.Col, coord.Col)},
+				End:   workbook.Coord{Row: max(grid.selectionAnchor.Row, coord.Row), Col: max(grid.selectionAnchor.Col, coord.Col)},
+			}
+		}
+		if event.Action == tea.MouseActionRelease {
+			grid.selecting = false
+		}
+		return 0, 0, false
+	}
 	if event.Action != tea.MouseActionPress || event.Button != tea.MouseButtonLeft {
 		return 0, 0, false
 	}
@@ -109,6 +131,8 @@ func (grid *GridViewport) HandleMouse(message tea.MouseMsg, sheet *workbook.Shee
 	}
 	if coord, ok := grid.CellAt(event.X, event.Y, sheet); ok {
 		grid.Selected = coord
+		grid.selectionAnchor = coord
+		grid.selecting = true
 		grid.Selection = workbook.CellRange{Start: coord, End: coord}
 	}
 	return 0, 0, false
@@ -155,8 +179,15 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 		output.WriteString(columnHeader.Width(width - 1).Render(truncate(label, width-1)))
 	}
 	for line := range rowCount {
+		rowPosition := grid.ScrollRow + line
+		row := rowPosition
+		if len(grid.VisibleRowIndexes) > 0 {
+			if rowPosition >= len(grid.VisibleRowIndexes) {
+				break
+			}
+			row = grid.VisibleRowIndexes[rowPosition]
+		}
 		output.WriteByte('\n')
-		row := grid.ScrollRow + line
 		output.WriteString(rowHeader.Width(grid.RowHeaderWidth - 1).Render(padRight(itoa(row+1), grid.RowHeaderWidth-1)))
 		for _, col := range columns {
 			width := grid.columnWidth(col, sheet)
@@ -181,7 +212,7 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 			if effective.Borders.Bottom.Preset != "" && effective.Borders.Bottom.Preset != "none" {
 				style = style.Underline(true)
 			}
-			if grid.Selected == coord {
+			if coordInRange(coord, grid.Selection) {
 				style = style.Reverse(true)
 			}
 			leftGlyph, rightGlyph := " ", ""
@@ -198,6 +229,11 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 		}
 	}
 	return output.String()
+}
+
+func coordInRange(coord workbook.Coord, selection workbook.CellRange) bool {
+	return coord.Row >= selection.Start.Row && coord.Row <= selection.End.Row &&
+		coord.Col >= selection.Start.Col && coord.Col <= selection.End.Col
 }
 
 func (grid *GridViewport) visibleColumns(sheet *workbook.Sheet) []int {
