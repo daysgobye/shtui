@@ -138,11 +138,18 @@ func (controller *Controller) View() string {
 	}
 	if controller.session == nil {
 		if controller.view.Palette.Open {
-			return controller.view.Palette.View(controller.width)
+			palette := controller.view.Palette.View(controller.width)
+			if controller.status != "" {
+				palette += "\n" + controller.status
+			}
+			return palette
 		}
 		home := "OmaSheet\nOpen or create a workbook\n\nO  Open file\nN  New CSV\nX  New XLSX\nCtrl+P  Command palette\nCtrl+C  Quit"
 		if controller.pathPrompt {
 			home += "\n" + controller.pathPromptView()
+		}
+		if controller.status != "" {
+			home += "\n" + controller.status
 		}
 		return home
 	}

@@ -81,6 +81,15 @@ func TestLoadErrorRetainsPriorSession(t *testing.T) {
 	}
 }
 
+func TestFailedOpenWithoutSessionShowsErrorOnHomeScreen(t *testing.T) {
+	controller := NewController("")
+	controller.Update(loadCompleteMsg{path: "/missing/book.csv", err: os.ErrNotExist})
+	view := controller.View()
+	if !strings.Contains(view, "book.csv") || !strings.Contains(view, "does not exist") {
+		t.Fatalf("home screen hid the open error: %q", view)
+	}
+}
+
 func TestPaletteOpenCommandStartsPathPrompt(t *testing.T) {
 	controller := NewController("")
 	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
