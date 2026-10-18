@@ -15,6 +15,7 @@ type Session struct {
 	Path          string
 	Format        Format
 	OriginalParts map[string][32]byte
+	Filters       map[string][]ColumnFilter
 	file          *excelize.File
 	history       historyState
 }
