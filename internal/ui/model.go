@@ -35,28 +35,31 @@ type pendingOperation struct {
 }
 
 type AppModel struct {
-	session           *workbook.Session
-	Grid              GridViewport
-	Palette           CommandPalette
-	FunctionPicker    formulaPickerState
-	ConditionalDialog conditionalDialogState
-	home              homeScreen
-	keys              KeyMap
-	Theme             ThemePalette
-	ColorPicker       colorPickerState
-	toolbarVisible    bool
-	width             int
-	height            int
-	editing           bool
-	editorInput       textinput.Model
-	findMode          bool
-	findQuery         string
-	themeQuery        func(uint8, time.Duration) (RGB, bool)
-	status            string
-	lastCommand       string
-	operation         pendingOperation
-	visibleSheet      string
-	filtersDirty      bool
+	session             *workbook.Session
+	Grid                GridViewport
+	Palette             CommandPalette
+	FunctionPicker      formulaPickerState
+	ConditionalDialog   conditionalDialogState
+	home                homeScreen
+	keys                KeyMap
+	Theme               ThemePalette
+	ColorPicker         colorPickerState
+	toolbarVisible      bool
+	width               int
+	height              int
+	editing             bool
+	editorInput         textinput.Model
+	findMode            bool
+	findQuery           string
+	themeQuery          func(uint8, time.Duration) (RGB, bool)
+	status              string
+	lastCommand         string
+	operation           pendingOperation
+	visibleSheet        string
+	filtersDirty        bool
+	csvNotice           string
+	csvNoticeGeneration uint64
+	pendingCSVNoticeCmd tea.Cmd
 }
 
 func NewModel(session *workbook.Session) AppModel {
@@ -101,8 +104,13 @@ func (model *AppModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, tea.Quit
 		}
 		model.handleKey(message)
+	case csvNoticeExpiredMsg:
+		if message.generation == model.csvNoticeGeneration {
+			model.csvNotice = ""
+		}
 	}
-	return model, nil
+	return model, model.takeCSVNoticeCmd()
+
 }
 
 func (model *AppModel) View() string {
@@ -140,6 +148,16 @@ func (model *AppModel) View() string {
 	if model.editing || model.findMode || model.operation.Mode != "" {
 		output.WriteByte('\n')
 		output.WriteString(model.inputOverlay())
+	}
+	if model.csvNotice != "" && model.session.Format == workbook.CSV {
+		base := output.String()
+		output.Reset()
+		output.WriteString(composeCornerNotice(
+			base,
+			renderCSVFeatureNotice(model.csvNotice, model.width, model.height),
+			model.width,
+			model.height,
+		))
 	}
 	if model.Palette.Open {
 		return ComposeOverlay(output.String(), model.Palette.View(model.width), model.width, model.height)
@@ -405,6 +423,7 @@ func (model *AppModel) handleConditionalDialogAction(action string) {
 		model.ColorPicker = colorPickerState{}
 		model.ConditionalDialog = conditionalDialogState{}
 		model.status = fmt.Sprintf("Applied %d conditional formatting rule(s)", len(rules))
+		model.showCSVFeatureNotice()
 	}
 }
 
@@ -440,6 +459,8 @@ func (model *AppModel) handleMouse(message tea.MouseMsg) {
 	if resized {
 		if err := workbook.SetColumnWidth(model.session, model.activeSheet().Name, col, float64(width)); err != nil {
 			model.status = err.Error()
+		} else {
+			model.showCSVFeatureNotice()
 		}
 	}
 }
@@ -496,7 +517,11 @@ func (model *AppModel) runCommand(command string) {
 		model.Palette.Show()
 		model.Palette.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("border")})
 	case "border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right", "border-none":
-		model.setStatus(workbook.ApplyBorderPreset(model.session, model.activeSheet().Name, model.selectedRange(), strings.TrimPrefix(command, "border-")))
+		err := workbook.ApplyBorderPreset(model.session, model.activeSheet().Name, model.selectedRange(), strings.TrimPrefix(command, "border-"))
+		model.setStatus(err)
+		if err == nil && command != "border-none" {
+			model.showCSVFeatureNotice()
+		}
 	case "toggle-bold":
 		style := model.activeSheet().Cells[model.Grid.Selected].Style
 		style.Bold = !style.Bold
@@ -518,7 +543,11 @@ func (model *AppModel) runCommand(command string) {
 			nameIndex++
 			name = "Sheet" + itoa(nameIndex)
 		}
-		model.setStatus(workbook.AddSheet(model.session, name))
+		err := workbook.AddSheet(model.session, name)
+		model.setStatus(err)
+		if err == nil {
+			model.showCSVFeatureNotice()
+		}
 	case "merge":
 		result, err := workbook.MergeRange(model.session, model.activeSheet().Name, model.selectedRange(), false)
 		if result == workbook.ConfirmationRequired {
@@ -526,6 +555,9 @@ func (model *AppModel) runCommand(command string) {
 			model.status = "Merging discards cell values. Confirm? (y/n)"
 		} else {
 			model.setStatus(err)
+			if err == nil {
+				model.showCSVFeatureNotice()
+			}
 		}
 	case "unmerge":
 		model.setStatus(workbook.UnmergeRange(model.session, model.activeSheet().Name, model.selectedRange()))
@@ -595,6 +627,9 @@ func (model *AppModel) applyOperation(mode, input string) {
 		if strings.EqualFold(input, "y") {
 			_, err := workbook.MergeRange(model.session, sheet.Name, model.selectedRange(), true)
 			model.setStatus(err)
+			if err == nil {
+				model.showCSVFeatureNotice()
+			}
 		} else {
 			model.status = "Merge cancelled"
 		}
@@ -711,7 +746,11 @@ func (model *AppModel) applyCellStyle(style workbook.CellStyle) {
 	if selection == (workbook.CellRange{}) && model.Grid.Selected != (workbook.Coord{}) {
 		selection = workbook.CellRange{Start: model.Grid.Selected, End: model.Grid.Selected}
 	}
-	model.setStatus(workbook.ApplyStyle(model.session, sheet.Name, selection, style))
+	err := workbook.ApplyStyle(model.session, sheet.Name, selection, style)
+	model.setStatus(err)
+	if err == nil {
+		model.showCSVFeatureNotice()
+	}
 }
 
 func (model *AppModel) moveSelection(rowDelta, colDelta int) {

@@ -641,3 +641,142 @@ func clickDialogText(t *testing.T, model *AppModel, target string) {
 	}
 	t.Fatalf("rendered dialog has no %q: %q", target, view)
 }
+
+func TestCSVFeatureNoticeAppearsAfterSuccessfulMutation(t *testing.T) {
+	mutations := []struct {
+		name string
+		run  func(*AppModel)
+	}{
+		{
+			name: "sheet addition",
+			run:  func(model *AppModel) { model.runCommand("add-sheet") },
+		},
+		{
+			name: "column resize",
+			run: func(model *AppModel) {
+				model.layout()
+				sheet := model.activeSheet()
+				x := model.Grid.OriginX + model.Grid.RowHeaderWidth + model.Grid.columnWidth(0, sheet)
+				y := model.Grid.OriginY
+				model.handleMouse(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+				model.handleMouse(tea.MouseMsg(tea.MouseEvent{X: x + 2, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}))
+				model.handleMouse(tea.MouseMsg(tea.MouseEvent{X: x + 2, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}))
+			},
+		},
+		{
+			name: "direct formatting",
+			run: func(model *AppModel) {
+				model.applyCellStyle(workbook.CellStyle{FillRGB: "112233"})
+			},
+		},
+		{
+			name: "border formatting",
+			run:  func(model *AppModel) { model.runCommand("border-all") },
+		},
+		{
+			name: "merge",
+			run: func(model *AppModel) {
+				model.Grid.Selection = workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Col: 1}}
+				model.runCommand("merge")
+			},
+		},
+		{
+			name: "conditional formatting",
+			run: func(model *AppModel) {
+				model.ConditionalDialog = newConditionalDialog("A1")
+				model.ConditionalDialog.ValueInput.SetValue("5")
+				model.ConditionalDialog.FillRGB = "CD0000"
+				model.handleConditionalDialogAction("done")
+			},
+		},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			model := newCSVFeatureNoticeModel(t)
+			mutation.run(model)
+			if view := ansi.Strip(model.View()); !strings.Contains(view, "CSV can't keep workbook features") {
+				t.Fatalf("successful %s did not show the CSV compatibility notice: %q", mutation.name, view)
+			}
+		})
+	}
+}
+
+func TestCSVFeatureNoticeDoesNotAppearForFailedMutationOrXLSXSession(t *testing.T) {
+	t.Run("failed conditional rule", func(t *testing.T) {
+		model := newCSVFeatureNoticeModel(t)
+		model.ConditionalDialog = newConditionalDialog("A0")
+		model.ConditionalDialog.ValueInput.SetValue("5")
+		model.ConditionalDialog.FillRGB = "CD0000"
+		model.handleConditionalDialogAction("done")
+		if view := ansi.Strip(model.View()); strings.Contains(view, "CSV can't keep workbook features") {
+			t.Fatalf("failed mutation showed a CSV compatibility notice: %q", view)
+		}
+		if !model.ConditionalDialog.Open || model.ConditionalDialog.Error == "" {
+			t.Fatalf("failed conditional rule did not remain open with an error: %#v", model.ConditionalDialog)
+		}
+	})
+	t.Run("XLSX session", func(t *testing.T) {
+		session, err := workbook.NewWorkbook(workbook.XLSX)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = session.Close() })
+		model := NewModel(session)
+		model.runCommand("add-sheet")
+		if view := ansi.Strip(model.View()); strings.Contains(view, "CSV can't keep workbook features") {
+			t.Fatalf("XLSX mutation showed a CSV compatibility notice: %q", view)
+		}
+	})
+}
+
+func TestCSVFeatureNoticeIsThemeAwareAndBelowBlockingOverlay(t *testing.T) {
+	model := newCSVFeatureNoticeModel(t)
+	model.runCommand("add-sheet")
+	model.ConditionalDialog = newConditionalDialog("A1")
+
+	view := model.View()
+	if !strings.Contains(ansi.Strip(view), "CSV can't keep workbook features") {
+		t.Fatalf("theme-aware notice is missing: %q", view)
+	}
+	if !strings.Contains(ansi.Strip(view), "Conditional formatting") {
+		t.Fatalf("notice obscured the blocking conditional-format dialog: %q", view)
+	}
+}
+
+func newCSVFeatureNoticeModel(t *testing.T) *AppModel {
+	t.Helper()
+	session, err := workbook.NewWorkbook(workbook.CSV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	model := NewModel(session)
+	model.width, model.height = 80, 24
+	model.layout()
+	return &model
+}
+
+func TestCSVFeatureNoticeExpiryDoesNotDismissNewerNotice(t *testing.T) {
+	model := newCSVFeatureNoticeModel(t)
+	model.runCommand("add-sheet")
+	_, timer := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if timer == nil {
+		t.Fatal("successful CSV feature did not schedule a notice expiry")
+	}
+	olderGeneration := model.csvNoticeGeneration
+
+	model.showCSVFeatureNotice()
+	newerGeneration := model.csvNoticeGeneration
+	if newerGeneration <= olderGeneration {
+		t.Fatalf("notice generation did not advance: older=%d newer=%d", olderGeneration, newerGeneration)
+	}
+
+	model.Update(csvNoticeExpiredMsg{generation: olderGeneration})
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "CSV can't keep workbook features") {
+		t.Fatalf("older expiry dismissed a newer notice: %q", view)
+	}
+	model.Update(csvNoticeExpiredMsg{generation: newerGeneration})
+	if view := ansi.Strip(model.View()); strings.Contains(view, "CSV can't keep workbook features") {
+		t.Fatalf("current expiry did not dismiss its notice: %q", view)
+	}
+}
