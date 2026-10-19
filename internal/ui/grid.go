@@ -263,18 +263,26 @@ func (grid *GridViewport) horizontalBoundary(sheet *workbook.Sheet, styleResolve
 		mergedAcrossRows := grid.mergedAcrossRows(sheet, upperRow, lowerRow, col)
 		border := workbook.BorderStyle{}
 		fill := ""
+		junctionFill := ""
 		if !mergedAcrossRows {
 			border = grid.horizontalBorder(sheet, col, upperRow, lowerRow)
-			fillRow := upperRow
-			if fillRow < 0 || fillRow >= sheet.Rows {
-				fillRow = lowerRow
+			if upperRow >= 0 && upperRow < sheet.Rows && lowerRow >= 0 && lowerRow < sheet.Rows {
+				fill = grid.sharedBoundaryFill(sheet, styleResolver,
+					workbook.Coord{Row: upperRow, Col: col},
+					workbook.Coord{Row: lowerRow, Col: col})
+				if index > 0 {
+					junctionFill = grid.junctionBoundaryFill(sheet, styleResolver,
+						workbook.Coord{Row: upperRow, Col: columns[index-1]},
+						workbook.Coord{Row: upperRow, Col: col},
+						workbook.Coord{Row: lowerRow, Col: columns[index-1]},
+						workbook.Coord{Row: lowerRow, Col: col})
+				}
 			}
-			fill = grid.boundaryFill(sheet, styleResolver, workbook.Coord{Row: fillRow, Col: col})
 		}
 		if mergedAcrossRows || (index > 0 && grid.mergedAcrossColumns(sheet, lowerRow, columns[index-1], col)) {
 			line.WriteByte(' ')
 		} else {
-			line.WriteString(grid.styleBorderGlyph(border, fill, "┼"))
+			line.WriteString(grid.styleBorderGlyph(border, junctionFill, "┼"))
 		}
 		if mergedAcrossRows {
 			line.WriteString(strings.Repeat(" ", width))
@@ -283,6 +291,31 @@ func (grid *GridViewport) horizontalBoundary(sheet *workbook.Sheet, styleResolve
 		line.WriteString(grid.horizontalStroke(border, width, fill))
 	}
 	return line.String()
+}
+
+func (grid *GridViewport) sharedBoundaryFill(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, first, second workbook.Coord) string {
+	firstFill := grid.boundaryFill(sheet, styleResolver, first)
+	if firstFill == "" {
+		return ""
+	}
+	secondFill := grid.boundaryFill(sheet, styleResolver, second)
+	if strings.EqualFold(firstFill, secondFill) {
+		return firstFill
+	}
+	return ""
+}
+
+func (grid *GridViewport) junctionBoundaryFill(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, topLeft, topRight, bottomLeft, bottomRight workbook.Coord) string {
+	fill := grid.boundaryFill(sheet, styleResolver, topLeft)
+	if fill == "" {
+		return ""
+	}
+	if strings.EqualFold(fill, grid.boundaryFill(sheet, styleResolver, topRight)) &&
+		strings.EqualFold(fill, grid.boundaryFill(sheet, styleResolver, bottomLeft)) &&
+		strings.EqualFold(fill, grid.boundaryFill(sheet, styleResolver, bottomRight)) {
+		return fill
+	}
+	return ""
 }
 
 func (grid *GridViewport) horizontalBorder(sheet *workbook.Sheet, col, upperRow, lowerRow int) workbook.BorderStyle {
@@ -302,15 +335,17 @@ func (grid *GridViewport) verticalBoundary(sheet *workbook.Sheet, styleResolver 
 		return " "
 	}
 	border := sheet.Cells[workbook.Coord{Row: row, Col: col}].Style.Borders.Left
-	fillCol := col
+	fill := ""
 	if index > 0 {
-		previous := sheet.Cells[workbook.Coord{Row: row, Col: columns[index-1]}].Style.Borders.Right
+		previousCol := columns[index-1]
+		previous := sheet.Cells[workbook.Coord{Row: row, Col: previousCol}].Style.Borders.Right
 		if previous.Preset != "" && previous.Preset != "none" {
 			border = previous
 		}
-		fillCol = columns[index-1]
+		fill = grid.sharedBoundaryFill(sheet, styleResolver,
+			workbook.Coord{Row: row, Col: previousCol},
+			workbook.Coord{Row: row, Col: col})
 	}
-	fill := grid.boundaryFill(sheet, styleResolver, workbook.Coord{Row: row, Col: fillCol})
 	return grid.verticalStroke(border, fill)
 }
 

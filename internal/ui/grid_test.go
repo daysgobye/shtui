@@ -12,18 +12,17 @@ import (
 	"omasheet/internal/workbook"
 )
 
-func TestGridFillTouchesCellBoundaries(t *testing.T) {
+func TestGridFillDoesNotColorExteriorBorderGlyphs(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
 	grid := NewGridViewport()
 	grid.SetBounds(0, 0, 40, 4)
-	fill := "123456"
 	border := workbook.BorderStyle{Preset: "thick", ColorRGB: "FF0000"}
 	sheet := &workbook.Sheet{
 		Rows: 1,
 		Cols: 1,
 		Cells: map[workbook.Coord]workbook.Cell{{}: {Input: "x", Style: workbook.CellStyle{
-			FillRGB: fill,
+			FillRGB: "123456",
 			Borders: workbook.BorderSet{Top: border, Bottom: border, Left: border, Right: border},
 		}}},
 	}
@@ -31,58 +30,157 @@ func TestGridFillTouchesCellBoundaries(t *testing.T) {
 	if len(rows) != 4 {
 		t.Fatalf("rendered rows = %d, want 4: %q", len(rows), rows)
 	}
-	fillColor, err := ParseRGBHex("#" + fill)
-	if err != nil {
-		t.Fatal(err)
-	}
 	borderColor, err := ParseRGBHex("#" + border.ColorRGB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantVertical := lipgloss.NewStyle().
-		Foreground(TerminalColor(borderColor, supportsTrueColor())).
-		Background(TerminalColor(fillColor, supportsTrueColor())).
-		Render("┃")
-	wantHorizontal := lipgloss.NewStyle().
-		Foreground(TerminalColor(borderColor, supportsTrueColor())).
-		Background(TerminalColor(fillColor, supportsTrueColor())).
-		Render("━")
+	wantVertical := lipgloss.NewStyle().Foreground(TerminalColor(borderColor, supportsTrueColor())).Render("┃")
+	wantHorizontal := lipgloss.NewStyle().Foreground(TerminalColor(borderColor, supportsTrueColor())).Render("━")
 	assertRenderedBoundary(t, rows[2], grid.RowHeaderWidth-1, "┃", wantVertical)
 	assertRenderedBoundary(t, rows[1], grid.RowHeaderWidth, "━", wantHorizontal)
 	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth, "━", wantHorizontal)
 }
 
-func TestGridSharedBoundaryUsesLeftAndUpperFill(t *testing.T) {
+func TestGridDifferentNeighborFillsKeepSharedBoundariesNeutral(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
 	grid := NewGridViewport()
 	grid.SetBounds(0, 0, 40, 8)
-	leftFill, rightFill := "FF0000", "0000FF"
 	sheet := &workbook.Sheet{
 		Rows: 2,
 		Cols: 2,
 		Cells: map[workbook.Coord]workbook.Cell{
-			{Row: 0, Col: 0}: {Style: workbook.CellStyle{FillRGB: leftFill}},
-			{Row: 0, Col: 1}: {Style: workbook.CellStyle{FillRGB: rightFill}},
+			{Row: 0, Col: 0}: {Style: workbook.CellStyle{FillRGB: "FF0000"}},
+			{Row: 0, Col: 1}: {Style: workbook.CellStyle{FillRGB: "0000FF"}},
 			{Row: 1, Col: 0}: {Style: workbook.CellStyle{FillRGB: "00FF00"}},
 			{Row: 1, Col: 1}: {Style: workbook.CellStyle{FillRGB: "FFFF00"}},
 		},
 	}
 	rows := strings.Split(grid.View(sheet, 8), "\n")
-	leftColor, err := ParseRGBHex("#" + leftFill)
-	if err != nil {
-		t.Fatal(err)
+	assertRenderedBoundary(t, rows[2], grid.RowHeaderWidth-1+defaultColumnWidth, "│", "│")
+	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth, "─", "─")
+	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth+defaultColumnWidth, "─", "─")
+}
+
+func TestGridSharedBoundaryFillRequiresMatchingAdjacentFills(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	cases := []struct {
+		name  string
+		first string
+		next  string
+		want  string
+	}{
+		{name: "same", first: "FF0000", next: "FF0000", want: "FF0000"},
+		{name: "different", first: "FF0000", next: "0000FF"},
+		{name: "empty neighbor", first: "FF0000"},
 	}
-	rightColor, err := ParseRGBHex("#" + rightFill)
-	if err != nil {
-		t.Fatal(err)
+	for _, testCase := range cases {
+		t.Run("vertical/"+testCase.name, func(t *testing.T) {
+			grid := NewGridViewport()
+			grid.SetBounds(0, 0, 40, 4)
+			sheet := &workbook.Sheet{
+				Rows: 1,
+				Cols: 2,
+				Cells: map[workbook.Coord]workbook.Cell{
+					{Row: 0, Col: 0}: {Style: workbook.CellStyle{FillRGB: testCase.first}},
+					{Row: 0, Col: 1}: {Style: workbook.CellStyle{FillRGB: testCase.next}},
+				},
+			}
+			rows := strings.Split(grid.View(sheet, 4), "\n")
+			assertFillBackground(t, rows[2], grid.RowHeaderWidth-1+defaultColumnWidth, "│", testCase.want)
+		})
+		t.Run("horizontal/"+testCase.name, func(t *testing.T) {
+			grid := NewGridViewport()
+			grid.SetBounds(0, 0, 40, 6)
+			sheet := &workbook.Sheet{
+				Rows: 2,
+				Cols: 1,
+				Cells: map[workbook.Coord]workbook.Cell{
+					{Row: 0, Col: 0}: {Style: workbook.CellStyle{FillRGB: testCase.first}},
+					{Row: 1, Col: 0}: {Style: workbook.CellStyle{FillRGB: testCase.next}},
+				},
+			}
+			rows := strings.Split(grid.View(sheet, 6), "\n")
+			assertFillBackground(t, rows[3], grid.RowHeaderWidth, "─", testCase.want)
+		})
 	}
-	assertRenderedBoundary(t, rows[2], grid.RowHeaderWidth-1+defaultColumnWidth, "│",
-		lipgloss.NewStyle().Background(TerminalColor(leftColor, supportsTrueColor())).Render("│"))
-	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth, "─",
-		lipgloss.NewStyle().Background(TerminalColor(leftColor, supportsTrueColor())).Render("─"))
-	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth+defaultColumnWidth, "─",
-		lipgloss.NewStyle().Background(TerminalColor(rightColor, supportsTrueColor())).Render("─"))
+}
+
+func TestGridJunctionFillRequiresFourMatchingCells(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	for _, testCase := range []struct {
+		name     string
+		mismatch workbook.Coord
+		fill     string
+		want     string
+	}{
+		{name: "all equal", fill: "FF0000", want: "FF0000"},
+		{name: "unlike neighbor", fill: "FF0000", mismatch: workbook.Coord{Row: 1, Col: 1}},
+		{name: "empty neighbor", fill: "FF0000", mismatch: workbook.Coord{Row: 1, Col: 1}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			grid := NewGridViewport()
+			grid.SetBounds(0, 0, 40, 6)
+			cells := make(map[workbook.Coord]workbook.Cell, 4)
+			for _, coord := range []workbook.Coord{{Row: 0, Col: 0}, {Row: 0, Col: 1}, {Row: 1, Col: 0}, {Row: 1, Col: 1}} {
+				fill := testCase.fill
+				if testCase.name == "unlike neighbor" && coord == testCase.mismatch {
+					fill = "0000FF"
+				}
+				if testCase.name == "empty neighbor" && coord == testCase.mismatch {
+					fill = ""
+				}
+				cells[coord] = workbook.Cell{Style: workbook.CellStyle{FillRGB: fill}}
+			}
+			sheet := &workbook.Sheet{Rows: 2, Cols: 2, Cells: cells}
+			rows := strings.Split(grid.View(sheet, 6), "\n")
+			assertFillBackground(t, rows[3], grid.RowHeaderWidth-1+defaultColumnWidth, "┼", testCase.want)
+		})
+	}
+}
+
+func TestGridMergedBoundaryFillUsesAnchor(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	for _, testCase := range []struct {
+		name         string
+		adjacentFill string
+		want         string
+	}{
+		{name: "matching neighbor", adjacentFill: "FF0000", want: "FF0000"},
+		{name: "unlike neighbor", adjacentFill: "0000FF"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			grid := NewGridViewport()
+			grid.SetBounds(0, 0, 50, 4)
+			sheet := &workbook.Sheet{
+				Rows: 1,
+				Cols: 3,
+				Cells: map[workbook.Coord]workbook.Cell{
+					{Row: 0, Col: 0}: {Style: workbook.CellStyle{FillRGB: "FF0000"}},
+					{Row: 0, Col: 2}: {Style: workbook.CellStyle{FillRGB: testCase.adjacentFill}},
+				},
+				Merges: []workbook.CellRange{{Start: workbook.Coord{Row: 0, Col: 0}, End: workbook.Coord{Row: 0, Col: 1}}},
+			}
+			rows := strings.Split(grid.View(sheet, 4), "\n")
+			assertFillBackground(t, rows[2], grid.RowHeaderWidth-1+2*defaultColumnWidth, "│", testCase.want)
+		})
+	}
+}
+
+func assertFillBackground(t *testing.T, line string, x int, glyph, fill string) {
+	t.Helper()
+	want := glyph
+	if fill != "" {
+		color, err := ParseRGBHex("#" + fill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = lipgloss.NewStyle().Background(TerminalColor(color, supportsTrueColor())).Render(glyph)
+	}
+	assertRenderedBoundary(t, line, x, glyph, want)
 }
 
 func TestFilledMergedCellKeepsOuterBorders(t *testing.T) {
@@ -119,17 +217,12 @@ func TestFilledMergedCellKeepsOuterBorders(t *testing.T) {
 			t.Fatalf("merged interior boundary at x=%d = %q with colors %q; want an unstyled space", x, glyph, colorParameters(style))
 		}
 	}
-	fillColor, err := ParseRGBHex("#" + fill)
-	if err != nil {
-		t.Fatal(err)
-	}
 	borderColor, err := ParseRGBHex("#" + border.ColorRGB)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertRenderedBoundary(t, rows[5], grid.RowHeaderWidth, "━",
-		lipgloss.NewStyle().Foreground(TerminalColor(borderColor, supportsTrueColor())).
-			Background(TerminalColor(fillColor, supportsTrueColor())).Render("━"))
+		lipgloss.NewStyle().Foreground(TerminalColor(borderColor, supportsTrueColor())).Render("━"))
 }
 
 func assertRenderedBoundary(t *testing.T, line string, x int, glyph, want string) {
