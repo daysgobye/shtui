@@ -23,6 +23,7 @@ var toolbarItems = []toolbarItem{
 	{ID: "insert-column", Label: "+ Col"},
 	{ID: "fill-color", Label: "Fill"},
 	{ID: "font-color", Label: "Font"},
+	{ID: "border-menu", Label: "Borders"},
 	{ID: "sort", Label: "Sort"},
 	{ID: "filter", Label: "Filter"},
 }
@@ -57,7 +58,7 @@ func toolbarItemStyle() lipgloss.Style {
 
 func toolbarGroupBoundary(index int) bool {
 	switch index {
-	case 3, 5, 7, 9, 11:
+	case 3, 5, 7, 9, 12:
 		return true
 	default:
 		return false

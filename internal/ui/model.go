@@ -420,10 +420,11 @@ func (model *AppModel) runCommand(command string) {
 		model.beginOperation("conditional")
 	case "insert-function":
 		model.FunctionPicker = newFormulaPicker(model.selectedRangeName(), model.defaultFormulaTargetName())
-	case "border":
-		style := model.activeSheet().Cells[model.Grid.Selected].Style
-		style.Borders.Bottom = workbook.BorderStyle{Preset: "thin"}
-		model.applyCellStyle(style)
+	case "border-menu":
+		model.Palette.Show()
+		model.Palette.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("border")})
+	case "border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right", "border-none":
+		model.setStatus(workbook.ApplyBorderPreset(model.session, model.activeSheet().Name, model.selectedRange(), strings.TrimPrefix(command, "border-")))
 	case "toggle-bold":
 		style := model.activeSheet().Cells[model.Grid.Selected].Style
 		style.Bold = !style.Bold
@@ -709,7 +710,7 @@ func (model *AppModel) ensureSelectedVisible() {
 	if rowPosition < model.Grid.ScrollRow {
 		model.Grid.ScrollRow = rowPosition
 	}
-	visibleRows := max(model.Grid.Height-model.Grid.HeaderHeight, 1)
+	visibleRows := max((model.Grid.Height-model.Grid.HeaderHeight)/2, 1)
 	if rowPosition >= model.Grid.ScrollRow+visibleRows {
 		model.Grid.ScrollRow = rowPosition - visibleRows + 1
 	}
