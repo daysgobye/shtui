@@ -162,6 +162,16 @@ func (grid *GridViewport) columnWidth(col int, sheet *workbook.Sheet) int {
 	return defaultColumnWidth
 }
 
+func (grid *GridViewport) renderedHeight(height int) int {
+	if grid == nil || height <= 0 {
+		return 0
+	}
+	rowCount := max((height-grid.HeaderHeight)/2, 0)
+	if len(grid.VisibleRowIndexes) > 0 {
+		rowCount = min(rowCount, max(len(grid.VisibleRowIndexes)-grid.ScrollRow, 0))
+	}
+	return 2 + rowCount*2
+}
 func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 	if grid == nil || sheet == nil || height <= 0 {
 		return ""

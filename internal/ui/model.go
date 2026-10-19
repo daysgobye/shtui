@@ -415,7 +415,7 @@ func (model *AppModel) handleMouse(message tea.MouseMsg) {
 	if model.session == nil || model.session.Workbook == nil {
 		return
 	}
-	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == model.height-2 {
+	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == model.sheetTabsY() {
 		model.selectSheetAt(event.X)
 		return
 	}
@@ -815,34 +815,74 @@ func (model *AppModel) formulaBar() string {
 	return fmt.Sprintf("%s!%s  fx  %s", sheet.Name, columnName(model.Grid.Selected.Col)+itoa(model.Grid.Selected.Row+1), value)
 }
 
-func (model *AppModel) sheetTabs() string {
-	if model.session == nil || model.session.Workbook == nil {
-		return ""
-	}
-	var tabs []string
-	for index, sheet := range model.session.Workbook.Sheets {
-		label := " " + sheet.Name + " "
-		if index == model.session.Workbook.ActiveSheet {
-			label = lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6)).Render(label)
-		}
-		tabs = append(tabs, label)
-	}
-	return strings.Join(tabs, "  ")
+type sheetTabHit struct {
+	StartX     int
+	EndX       int
+	SheetIndex int
 }
 
-func (model *AppModel) selectSheetAt(x int) {
+type sheetTabsLayout struct {
+	View           string
+	Tabs           []sheetTabHit
+	AddSheetStartX int
+	AddSheetEndX   int
+}
+
+func (model *AppModel) sheetTabsLayout() sheetTabsLayout {
+	layout := sheetTabsLayout{}
 	if model.session == nil || model.session.Workbook == nil {
-		return
+		return layout
 	}
+	var output strings.Builder
 	position := 0
 	for index, sheet := range model.session.Workbook.Sheets {
 		label := " " + sheet.Name + " "
-		width := lipgloss.Width(label)
-		if x >= position && x < position+width {
-			model.activateSheet(index)
+		layout.Tabs = append(layout.Tabs, sheetTabHit{
+			StartX: position, EndX: position + lipgloss.Width(label), SheetIndex: index,
+		})
+		if index == model.session.Workbook.ActiveSheet {
+			output.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6)).Render(label))
+		} else {
+			output.WriteString(label)
+		}
+		position += lipgloss.Width(label)
+		if index < len(model.session.Workbook.Sheets)-1 {
+			output.WriteString("  ")
+			position += 2
+		}
+	}
+	if len(model.session.Workbook.Sheets) > 0 {
+		output.WriteString("  ")
+		position += 2
+		addSheetLabel := " + "
+		layout.AddSheetStartX = position
+		layout.AddSheetEndX = position + lipgloss.Width(addSheetLabel)
+		output.WriteString(lipgloss.NewStyle().Foreground(ANSIColor(8)).Render(addSheetLabel))
+	}
+	layout.View = output.String()
+	return layout
+}
+
+func (model *AppModel) sheetTabs() string {
+	return model.sheetTabsLayout().View
+}
+
+func (model *AppModel) sheetTabsY() int {
+	originY := model.topLines()
+	gridHeight := max(model.height-originY-2, 1)
+	return originY + model.Grid.renderedHeight(gridHeight)
+}
+
+func (model *AppModel) selectSheetAt(x int) {
+	tabLayout := model.sheetTabsLayout()
+	for _, tab := range tabLayout.Tabs {
+		if x >= tab.StartX && x < tab.EndX {
+			model.activateSheet(tab.SheetIndex)
 			return
 		}
-		position += width + 2
+	}
+	if x >= tabLayout.AddSheetStartX && x < tabLayout.AddSheetEndX {
+		model.runCommand("add-sheet")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"omasheet/internal/workbook"
 )
 
@@ -75,6 +76,81 @@ func TestSheetNavigationSupportsKeyboardAndMouseTabs(t *testing.T) {
 	model.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 10, Y: model.height - 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
 	if model.session.Workbook.ActiveSheet != 1 || model.Grid.Selected != (workbook.Coord{}) || model.Grid.ScrollRow != 0 {
 		t.Fatalf("mouse tab change lost its behavior: sheet=%d selected=%+v scroll=%d", model.session.Workbook.ActiveSheet, model.Grid.Selected, model.Grid.ScrollRow)
+	}
+}
+
+func TestSheetTabClickUsesRenderedRow(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		width, height int
+		toolbar       bool
+	}{
+		{name: "toolbar visible normal", width: 80, height: 24, toolbar: true},
+		{name: "toolbar hidden normal", width: 80, height: 24},
+		{name: "toolbar visible compact", width: 30, height: 10, toolbar: true},
+		{name: "toolbar hidden compact", width: 30, height: 10},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := newInteractionModel(t, 2)
+			model.width, model.height = testCase.width, testCase.height
+			model.toolbarVisible = testCase.toolbar
+			model.Grid.Selected = workbook.Coord{Row: 7, Col: 4}
+			model.Grid.ScrollRow = 5
+			model.Grid.ScrollCol = 2
+
+			lines := strings.Split(model.View(), "\n")
+			tabY, tabX := -1, -1
+			for y, line := range lines {
+				if x := strings.Index(line, "Sheet2"); x >= 0 {
+					tabY, tabX = y, lipgloss.Width(line[:x])
+					break
+				}
+			}
+			if tabY < 0 {
+				t.Fatalf("rendered view has no Sheet2 tab: %q", lines)
+			}
+
+			model.Update(tea.MouseMsg(tea.MouseEvent{
+				X: tabX, Y: tabY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+			}))
+
+			if model.session.Workbook.ActiveSheet != 1 {
+				t.Fatalf("active sheet = %d, want 1 after clicking rendered tab row %d", model.session.Workbook.ActiveSheet, tabY)
+			}
+			if model.Grid.Selected != (workbook.Coord{}) || model.Grid.ScrollRow != 0 || model.Grid.ScrollCol != 0 {
+				t.Fatalf("sheet click did not reset navigation: selected=%+v scroll=(%d,%d)", model.Grid.Selected, model.Grid.ScrollRow, model.Grid.ScrollCol)
+			}
+		})
+	}
+}
+
+func TestAddSheetPlusClickCreatesAndActivatesSheet(t *testing.T) {
+	model := newInteractionModel(t, 2)
+	model.width, model.height = 80, 24
+
+	lines := strings.Split(model.View(), "\n")
+	tabY, tabX := -1, -1
+	for y, line := range lines {
+		if strings.Contains(line, "Sheet2") {
+			if x := strings.Index(line, "+"); x >= 0 {
+				tabY, tabX = y, lipgloss.Width(line[:x])
+				break
+			}
+		}
+	}
+	if tabY < 0 {
+		t.Fatalf("rendered view has no Add Sheet + target: %q", lines)
+	}
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: tabX, Y: tabY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+
+	if len(model.session.Workbook.Sheets) != 3 {
+		t.Fatalf("sheet count = %d, want 3 after clicking +", len(model.session.Workbook.Sheets))
+	}
+	if model.session.Workbook.Sheets[model.session.Workbook.ActiveSheet].Name != "Sheet3" {
+		t.Fatalf("active sheet = %q, want Sheet3", model.session.Workbook.Sheets[model.session.Workbook.ActiveSheet].Name)
 	}
 }
 
