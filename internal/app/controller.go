@@ -3,9 +3,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/filepicker"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"omasheet/internal/ui"
 	"omasheet/internal/workbook"
 )
@@ -29,9 +34,12 @@ type Controller struct {
 	loading         bool
 	loadingPath     string
 	saving          bool
-	pathPrompt      bool
-	pathMode        string
-	pathInput       string
+	picker          filepicker.Model
+	pickerOpen      bool
+	pickerMode      string
+	pickerFocused   bool
+	saveName        textinput.Model
+	keys            ui.KeyMap
 	confirmCSVLoss  bool
 	pendingSavePath string
 	status          string
@@ -40,7 +48,49 @@ type Controller struct {
 }
 
 func NewController(path string) *Controller {
-	return &Controller{initialPath: path, view: ui.NewModel(nil), width: 80, height: 24}
+	picker := filepicker.New()
+	if directory, err := os.Getwd(); err == nil {
+		picker.CurrentDirectory = directory
+	}
+	picker.AllowedTypes = []string{".csv", ".xlsx"}
+	picker.DirAllowed = true
+	picker.FileAllowed = true
+	picker.ShowPermissions = false
+	picker.ShowSize = false
+	picker.AutoHeight = false
+	picker.SetHeight(12)
+	configurePickerTheme(&picker)
+
+	filename := textinput.New()
+	filename.Prompt = "Filename "
+	filename.Placeholder = "workbook.csv"
+	filename.Width = 52
+	filename.PromptStyle = lipgloss.NewStyle().Foreground(ui.ANSIColor(6)).Bold(true)
+	filename.TextStyle = lipgloss.NewStyle().Foreground(ui.ANSIColor(7))
+
+	return &Controller{
+		initialPath: path,
+		view:        ui.NewModel(nil),
+		picker:      picker,
+		saveName:    filename,
+		keys:        ui.DefaultKeyMap(),
+		width:       80,
+		height:      24,
+	}
+}
+func configurePickerTheme(picker *filepicker.Model) {
+	styles := filepicker.DefaultStyles()
+	styles.Cursor = lipgloss.NewStyle().Foreground(ui.ANSIColor(6)).Bold(true)
+	styles.Directory = lipgloss.NewStyle().Foreground(ui.ANSIColor(6)).Bold(true)
+	styles.File = lipgloss.NewStyle().Foreground(ui.ANSIColor(7))
+	styles.DisabledFile = lipgloss.NewStyle().Foreground(ui.ANSIColor(8))
+	styles.Symlink = lipgloss.NewStyle().Foreground(ui.ANSIColor(5))
+	styles.Selected = lipgloss.NewStyle().Foreground(ui.ANSIColor(7)).Reverse(true)
+	styles.DisabledSelected = lipgloss.NewStyle().Foreground(ui.ANSIColor(8)).Reverse(true)
+	styles.Permission = lipgloss.NewStyle().Foreground(ui.ANSIColor(8))
+	styles.FileSize = lipgloss.NewStyle().Foreground(ui.ANSIColor(8))
+	styles.EmptyDirectory = lipgloss.NewStyle().Foreground(ui.ANSIColor(8))
+	picker.Styles = styles
 }
 
 func (controller *Controller) Init() tea.Cmd {
@@ -56,6 +106,25 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if controller == nil {
 		return controller, nil
 	}
+	if keyMessage, ok := message.(tea.KeyMsg); ok && keyMessage.Type == tea.KeyCtrlC {
+		return controller, tea.Quit
+	}
+	if size, ok := message.(tea.WindowSizeMsg); ok {
+		controller.width = size.Width
+		controller.height = size.Height
+		_, viewCommand := controller.view.Update(size)
+		controller.picker.SetHeight(max(size.Height-8, 1))
+		if controller.pickerOpen {
+			var pickerCommand tea.Cmd
+			controller.picker, pickerCommand = controller.picker.Update(size)
+			return controller, tea.Batch(viewCommand, pickerCommand)
+		}
+		return controller, viewCommand
+	}
+	if controller.pickerOpen {
+		return controller, controller.updatePicker(message)
+	}
+
 	switch message := message.(type) {
 	case loadCompleteMsg:
 		controller.loading = false
@@ -83,30 +152,22 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return controller, nil
 	case tea.KeyMsg:
-		if message.Type == tea.KeyCtrlC {
-			return controller, tea.Quit
-		}
 		if controller.loading || controller.saving {
 			return controller, nil
 		}
 		if controller.confirmCSVLoss {
 			return controller, controller.handleCSVConfirmation(message)
 		}
-		if controller.pathPrompt {
-			return controller, controller.handlePathPrompt(message)
+		if controller.keys.Matches(message, controller.keys.OpenFile) {
+			return controller, controller.beginPicker("open")
 		}
-		if message.Type == tea.KeyCtrlO {
-			controller.beginPathPrompt("open")
-			return controller, nil
-		}
-		if message.Type == tea.KeyCtrlS {
+		if controller.keys.Matches(message, controller.keys.Save) {
 			return controller, controller.requestSave()
 		}
 		if controller.session == nil && !controller.view.Palette.Open && message.Type == tea.KeyRunes && len(message.Runes) == 1 {
 			switch strings.ToLower(string(message.Runes)) {
 			case "o":
-				controller.beginPathPrompt("open")
-				return controller, nil
+				return controller, controller.beginPicker("open")
 			case "n":
 				controller.newWorkbook(workbook.CSV)
 				return controller, nil
@@ -118,11 +179,6 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		_, command := controller.view.Update(message)
 		action := controller.view.TakeCommand()
 		return controller, controller.handleAction(action, command)
-	case tea.WindowSizeMsg:
-		controller.width = message.Width
-		controller.height = message.Height
-		_, command := controller.view.Update(message)
-		return controller, command
 	default:
 		_, command := controller.view.Update(message)
 		return controller, command
@@ -136,36 +192,31 @@ func (controller *Controller) View() string {
 	if controller.loading && controller.session == nil {
 		return "OmaSheet\nLoading " + controller.loadingPath + "…"
 	}
+
+	var content string
 	if controller.session == nil {
-		if controller.view.Palette.Open {
-			palette := controller.view.Palette.View(controller.width)
-			if controller.status != "" {
-				palette += "\n" + controller.status
-			}
-			return palette
+		content = "OmaSheet\nOpen or create a workbook\n\nO  Open file\nN  New CSV\nX  New XLSX\nCtrl+P  Command palette\nCtrl+C  Quit"
+	} else {
+		content = controller.view.View()
+		switch {
+		case controller.confirmCSVLoss:
+			content += "\nCSV warning: " + strings.Join(controller.csvLossWarnings(), "; ") + ". Press Enter or Y to continue, Esc to cancel."
+		case controller.loading:
+			content += "\nLoading " + controller.loadingPath + "…"
+		case controller.saving:
+			content += "\nSaving " + controller.pendingSavePath + "…"
+		case controller.status != "":
+			content += "\n" + controller.status
 		}
-		home := "OmaSheet\nOpen or create a workbook\n\nO  Open file\nN  New CSV\nX  New XLSX\nCtrl+P  Command palette\nCtrl+C  Quit"
-		if controller.pathPrompt {
-			home += "\n" + controller.pathPromptView()
-		}
-		if controller.status != "" {
-			home += "\n" + controller.status
-		}
-		return home
 	}
-	content := controller.view.View()
-	switch {
-	case controller.pathPrompt:
-		prompt := controller.pathPromptView()
-		content += "\n" + prompt
-	case controller.confirmCSVLoss:
-		content += "\nCSV warning: " + strings.Join(controller.csvLossWarnings(), "; ") + ". Press Enter or Y to continue, Esc to cancel."
-	case controller.loading:
-		content += "\nLoading " + controller.loadingPath + "…"
-	case controller.saving:
-		content += "\nSaving " + controller.pendingSavePath + "…"
-	case controller.status != "":
+	if controller.status != "" && controller.session == nil {
 		content += "\n" + controller.status
+	}
+	if controller.pickerOpen {
+		return ui.ComposeOverlay(content, controller.pickerView(), controller.width, controller.height)
+	}
+	if controller.session == nil && controller.view.Palette.Open {
+		return ui.ComposeOverlay(content, controller.view.Palette.View(controller.width), controller.width, controller.height)
 	}
 	return content
 }
@@ -188,7 +239,7 @@ func (controller *Controller) saveCmd(path string) tea.Cmd {
 func (controller *Controller) handleAction(action string, command tea.Cmd) tea.Cmd {
 	switch action {
 	case "open-file":
-		controller.beginPathPrompt("open")
+		return controller.beginPicker("open")
 	case "new-csv":
 		controller.newWorkbook(workbook.CSV)
 	case "new-xlsx":
@@ -196,7 +247,7 @@ func (controller *Controller) handleAction(action string, command tea.Cmd) tea.C
 	case "save":
 		return controller.requestSave()
 	case "save-as":
-		controller.beginPathPrompt("save")
+		return controller.beginPicker("save")
 	}
 	return command
 }
@@ -213,53 +264,112 @@ func (controller *Controller) requestSave() tea.Cmd {
 		return nil
 	}
 	if controller.session.Path == "" {
-		controller.beginPathPrompt("save")
-		return nil
+		return controller.beginPicker("save")
 	}
 	return controller.startSave(controller.session.Path)
 }
 
-func (controller *Controller) beginPathPrompt(mode string) {
-	controller.pathPrompt = true
-	controller.pathMode = mode
-	controller.pathInput = ""
+func (controller *Controller) beginPicker(mode string) tea.Cmd {
+	controller.pickerOpen = true
+	controller.pickerMode = mode
+	controller.pickerFocused = false
 	controller.status = ""
-}
-
-func (controller *Controller) pathPromptView() string {
-	label := "Open file"
-	if controller.pathMode == "save" {
-		label = "Save as"
+	controller.picker.Path = ""
+	controller.picker.AllowedTypes = []string{".csv", ".xlsx"}
+	controller.picker.DirAllowed = true
+	controller.picker.FileAllowed = mode == "open"
+	controller.picker.SetHeight(max(controller.height-8, 1))
+	if mode == "save" && controller.path != "" {
+		controller.picker.CurrentDirectory = filepath.Dir(controller.path)
 	}
-	return label + " path: " + controller.pathInput + "_\nEnter to continue · Esc to cancel"
+	if mode == "save" {
+		controller.saveName.Reset()
+		focusCommand := controller.saveName.Focus()
+		return tea.Batch(controller.picker.Init(), focusCommand)
+	}
+	controller.saveName.Blur()
+	return controller.picker.Init()
 }
 
-func (controller *Controller) handlePathPrompt(message tea.KeyMsg) tea.Cmd {
-	switch message.Type {
-	case tea.KeyEsc:
-		controller.pathPrompt = false
-		controller.pathInput = ""
-	case tea.KeyEnter:
-		path := strings.TrimSpace(controller.pathInput)
-		if path == "" {
-			controller.status = "Enter a file path"
+func (controller *Controller) updatePicker(message tea.Msg) tea.Cmd {
+	if keyMessage, ok := message.(tea.KeyMsg); ok {
+		if keyMessage.Type == tea.KeyEsc {
+			controller.pickerOpen = false
+			controller.pickerFocused = false
+			controller.saveName.Blur()
+			controller.status = ""
 			return nil
 		}
-		controller.pathPrompt = false
-		controller.pathInput = ""
-		if controller.pathMode == "open" {
+		if controller.pickerMode == "save" && !controller.pickerFocused {
+			switch keyMessage.Type {
+			case tea.KeyTab:
+				controller.pickerFocused = true
+				controller.saveName.Blur()
+				return nil
+			case tea.KeyEnter:
+				name := strings.TrimSpace(controller.saveName.Value())
+				if name == "" {
+					controller.status = "Enter a file name"
+					return nil
+				}
+				path := filepath.Join(controller.picker.CurrentDirectory, name)
+				controller.pickerOpen = false
+				controller.saveName.Blur()
+				return controller.prepareSave(path)
+			default:
+				var command tea.Cmd
+				controller.saveName, command = controller.saveName.Update(keyMessage)
+				return command
+			}
+		}
+		if controller.pickerMode == "save" && controller.pickerFocused && keyMessage.Type == tea.KeyTab {
+			controller.pickerFocused = false
+			return controller.saveName.Focus()
+		}
+		currentDirectory := controller.picker.CurrentDirectory
+		var command tea.Cmd
+		controller.picker, command = controller.picker.Update(keyMessage)
+		if controller.picker.CurrentDirectory != currentDirectory {
+			return command
+		}
+		if selected, path := controller.picker.DidSelectFile(keyMessage); selected {
+			controller.pickerOpen = false
 			return controller.startLoad(path)
 		}
-		return controller.prepareSave(path)
-	case tea.KeyBackspace:
-		runes := []rune(controller.pathInput)
-		if len(runes) > 0 {
-			controller.pathInput = string(runes[:len(runes)-1])
+		if disabled, _ := controller.picker.DidSelectDisabledFile(keyMessage); disabled {
+			controller.status = "Unsupported file; choose a supported .csv or .xlsx workbook"
 		}
-	case tea.KeyRunes:
-		controller.pathInput += string(message.Runes)
+		return command
 	}
-	return nil
+	var command tea.Cmd
+	controller.picker, command = controller.picker.Update(message)
+	return command
+}
+
+func (controller *Controller) pickerView() string {
+	title := "Open workbook"
+	controls := "↑/↓ navigate · Enter open/select · Esc close"
+	rows := []string{title, "Esc close · " + controller.picker.CurrentDirectory, ""}
+	if controller.pickerMode == "save" {
+		title = "Save as"
+		controls = "Tab browse folders · Enter save · Esc cancel"
+		rows[0] = title
+		rows = append(rows, controller.saveName.View(), "")
+		if controller.pickerFocused {
+			rows[2] = "Choose a folder, then Tab to enter a filename"
+		}
+	}
+	rows = append(rows, strings.TrimRight(controller.picker.View(), "\\n"), controls)
+	if controller.status != "" {
+		rows = append(rows, controller.status)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.ANSIColor(6)).
+		Padding(0, 1).
+		Width(max(controller.width-4, 1)).
+		Render(content)
 }
 
 func (controller *Controller) startLoad(path string) tea.Cmd {
@@ -319,8 +429,7 @@ func (controller *Controller) confirmCSVSave() tea.Cmd {
 	path := controller.pendingSavePath
 	controller.pendingSavePath = ""
 	if path == "" {
-		controller.beginPathPrompt("save")
-		return nil
+		return controller.beginPicker("save")
 	}
 	return controller.startSave(path)
 }

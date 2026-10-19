@@ -90,13 +90,13 @@ func TestFailedOpenWithoutSessionShowsErrorOnHomeScreen(t *testing.T) {
 	}
 }
 
-func TestPaletteOpenCommandStartsPathPrompt(t *testing.T) {
+func TestPaletteOpenCommandStartsPicker(t *testing.T) {
 	controller := NewController("")
 	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("open file")})
-	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !controller.pathPrompt || !strings.Contains(controller.View(), "Open file path") {
-		t.Fatalf("command-palette Open file did not start path input: %q", controller.View())
+	_, command := controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil || !strings.Contains(controller.View(), "Open workbook") {
+		t.Fatalf("command-palette Open file did not start the picker: %q", controller.View())
 	}
 }
 
@@ -167,4 +167,143 @@ func TestCtrlSavesSelectedWorkbook(t *testing.T) {
 
 func teaKeyCtrlS() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyCtrlS}
+}
+func TestOpenPickerFiltersCSVAndXLSX(t *testing.T) {
+	directory := t.TempDir()
+	for name, data := range map[string][]byte{
+		"a.csv":  []byte("value\n"),
+		"b.xlsx": []byte("not opened in this test"),
+		"c.txt":  []byte("unsupported"),
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	controller := NewController("")
+	openPicker(t, controller, directory)
+	view := controller.View()
+	if !strings.Contains(view, "a.csv") || !strings.Contains(view, "b.xlsx") {
+		t.Fatalf("picker did not list supported files: %q", view)
+	}
+
+	controller.Update(tea.KeyMsg{Type: tea.KeyDown})
+	controller.Update(tea.KeyMsg{Type: tea.KeyDown})
+	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if controller.loading || !strings.Contains(strings.ToLower(controller.View()), "supported") {
+		t.Fatalf("unsupported file reached loading path without warning: %q", controller.View())
+	}
+
+	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if _, command := controller.Update(tea.KeyMsg{Type: tea.KeyEnter}); command == nil {
+		t.Fatal("CSV selection did not start asynchronous loading")
+	}
+
+	xlsxController := NewController("")
+	openPicker(t, xlsxController, directory)
+	xlsxController.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if _, command := xlsxController.Update(tea.KeyMsg{Type: tea.KeyEnter}); command == nil {
+		t.Fatal("XLSX selection did not start asynchronous loading")
+	}
+}
+
+func TestOpenPickerEscapePreservesWorkbook(t *testing.T) {
+	session := &workbook.Session{
+		Path:   "existing.csv",
+		Format: workbook.CSV,
+		Workbook: &workbook.Workbook{
+			Format: workbook.CSV, Dirty: true,
+			Sheets: []workbook.Sheet{{Name: "Existing", Cells: map[workbook.Coord]workbook.Cell{{Row: 0, Col: 0}: {Input: "keep"}}}},
+		},
+	}
+	controller := NewController("")
+	controller.session = session
+	controller.path = session.Path
+	controller.view = ui.NewModel(session)
+	openPicker(t, controller, t.TempDir())
+
+	controller.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if controller.session != session || controller.path != session.Path || !session.Workbook.Dirty {
+		t.Fatal("canceling the picker changed the current workbook or path")
+	}
+	if !strings.Contains(controller.View(), "keep") {
+		t.Fatalf("canceling the picker did not restore the workbook view: %q", controller.View())
+	}
+}
+
+func TestOpenPickerUsesExistingAsyncLoadPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.csv")
+	if err := os.WriteFile(path, []byte("value\nfrom-picker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	controller := NewController("")
+	openPicker(t, controller, filepath.Dir(path))
+
+	_, command := controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("selecting a supported file did not return the async load command")
+	}
+	message := command()
+	controller.Update(message)
+	if controller.session == nil || controller.path != path {
+		t.Fatalf("async load did not publish selected workbook: session=%#v path=%q", controller.session, controller.path)
+	}
+	if got := controller.session.Workbook.Sheets[0].Cells[workbook.Coord{Row: 1}].Input; got != "from-picker" {
+		t.Fatalf("loaded A2 = %q, want from-picker", got)
+	}
+}
+
+func TestOpenPickerFitsSmallTerminal(t *testing.T) {
+	controller := NewController("")
+	openPicker(t, controller, t.TempDir())
+	controller.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+
+	view := controller.View()
+	if rows := strings.Count(view, "\n") + 1; rows > 8 {
+		t.Fatalf("picker popup rendered %d rows in an 8-row terminal: %q", rows, view)
+	}
+	if !strings.Contains(view, "Open workbook") || !strings.Contains(view, "Esc") {
+		t.Fatalf("small-terminal view lost picker controls: %q", view)
+	}
+}
+
+func TestSaveAsPickerKeepsCSVLossWarning(t *testing.T) {
+	session := &workbook.Session{
+		Format: workbook.CSV,
+		Workbook: &workbook.Workbook{
+			Format: workbook.CSV,
+			Sheets: []workbook.Sheet{{Name: "Sheet1", Cells: map[workbook.Coord]workbook.Cell{{Row: 0, Col: 0}: {Input: "x", Style: workbook.CellStyle{FillRGB: "FF0000"}}}}},
+		},
+	}
+	controller := NewController("")
+	controller.session = session
+	controller.view = ui.NewModel(session)
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("save as")})
+	_, initPicker := controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if initPicker == nil {
+		t.Fatal("Save As did not open the file picker")
+	}
+	controller.Update(initPicker())
+	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("export.csv")})
+	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !controller.confirmCSVLoss || filepath.Base(controller.pendingSavePath) != "export.csv" {
+		t.Fatalf("Save As bypassed the CSV loss warning: warning=%t path=%q", controller.confirmCSVLoss, controller.pendingSavePath)
+	}
+	if !strings.Contains(controller.View(), "formatting") {
+		t.Fatalf("CSV loss warning is not visible: %q", controller.View())
+	}
+}
+
+func openPicker(t *testing.T, controller *Controller, directory string) {
+	t.Helper()
+	t.Chdir(directory)
+	controller.picker.CurrentDirectory = directory
+	_, command := controller.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if command == nil {
+		t.Fatal("Ctrl+O did not start the asynchronous file picker")
+	}
+	if message := command(); message != nil {
+		controller.Update(message)
+	}
 }
