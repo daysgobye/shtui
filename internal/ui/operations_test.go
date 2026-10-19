@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"omasheet/internal/workbook"
 )
 
@@ -50,7 +51,7 @@ func TestSortAndFilterCommandsOperateOnWorkbook(t *testing.T) {
 	}
 }
 
-func TestMergeConfirmationAndConditionalFormattingCommands(t *testing.T) {
+func TestMergeConfirmationAndUndo(t *testing.T) {
 	session, err := workbook.NewWorkbook(workbook.XLSX)
 	if err != nil {
 		t.Fatal(err)
@@ -89,19 +90,193 @@ func TestMergeConfirmationAndConditionalFormattingCommands(t *testing.T) {
 	if len(session.Workbook.Sheets[0].Merges) != 0 || session.Workbook.Sheets[0].Cells[workbook.Coord{Col: 1}].Input != "discard" {
 		t.Fatal("undo did not restore merged values and metadata")
 	}
-	model.Grid.Selection = workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1, Col: 1}}
+}
+
+func TestConditionalDialogPrefillsRangeAndAppliesRule(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
 	model.runCommand("conditional-format")
-	model.applyOperation("conditional", ">1")
-	if !model.ColorPicker.Open || model.ColorPicker.Target != conditionalColorTarget {
-		t.Fatal("conditional-format command did not open theme color picker")
+	view := model.View()
+	for _, expected := range []string{"Conditional formatting", "Single color", "A1:A2"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("conditional dialog missing %q: %s", expected, view)
+		}
 	}
-	model.applyColor(RGB{R: 20, G: 40, B: 60})
-	if len(session.Workbook.Sheets[0].ConditionalRules) != 1 {
-		t.Fatalf("conditional rule count = %d, want 1", len(session.Workbook.Sheets[0].ConditionalRules))
+	pressDialogEnter(&model, 3)
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	chooseThemeRed(&model)
+	pressDialogTab(&model, 3)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	rules := model.session.Workbook.Sheets[0].ConditionalRules
+	if model.ConditionalDialog.Open || len(rules) != 1 || rules[0].Range != (workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}}) {
+		t.Fatalf("Done did not apply the selected range: open=%t focus=%d error=%q picker=%#v rules=%#v", model.ConditionalDialog.Open, model.ConditionalDialog.Focus, model.ConditionalDialog.Error, model.ColorPicker, rules)
 	}
-	if got := session.Workbook.Sheets[0].ConditionalRules[0].FillRGB; got != "14283C" {
-		t.Fatalf("conditional fill = %q, want 14283C", got)
+	if rules[0].Operator != workbook.GreaterThan || rules[0].Value != "5" || rules[0].FillRGB != "CD0000" {
+		t.Fatalf("applied conditional rule = %#v", rules[0])
 	}
+	if got := workbook.EffectiveStyle(&model.session.Workbook.Sheets[0], workbook.Coord{Row: 1}).FillRGB; got != "CD0000" {
+		t.Fatalf("matching cell fill = %q, want theme red", got)
+	}
+	if got := workbook.EffectiveStyle(&model.session.Workbook.Sheets[0], workbook.Coord{}).FillRGB; got != "" {
+		t.Fatalf("nonmatching cell fill = %q, want unchanged", got)
+	}
+}
+
+func TestConditionalDialogAddsMultipleRules(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	draftConditionalRule(&model, "5", false)
+	if len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 {
+		t.Fatal("Add another rule mutated workbook before Done")
+	}
+	draftConditionalRule(&model, "3", true)
+	pressDialogTab(&model, 5)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	rules := model.session.Workbook.Sheets[0].ConditionalRules
+	if len(rules) != 2 || rules[0].Operator != workbook.GreaterThan || rules[1].Operator != workbook.LessThan || rules[1].Value != "3" {
+		t.Fatalf("Done applied rules = %#v", rules)
+	}
+}
+
+func TestConditionalDialogCancelLeavesWorkbookUnchanged(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.ConditionalDialog.Open || len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 {
+		t.Fatal("Cancel left a dialog open or mutated the workbook")
+	}
+}
+
+func TestConditionalDialogRejectsInvalidRangeWithoutMutation(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	model.ConditionalDialog.RangeInput.SetValue("A0:A5")
+	model.ConditionalDialog.ValueInput.SetValue("5")
+	model.ConditionalDialog.FillRGB = "CD0000"
+	model.ConditionalDialog.Focus = 7
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.ConditionalDialog.Open || len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 || model.ConditionalDialog.Error == "" {
+		t.Fatalf("invalid range outcome: open=%t rules=%#v error=%q", model.ConditionalDialog.Open, model.session.Workbook.Sheets[0].ConditionalRules, model.ConditionalDialog.Error)
+	}
+}
+
+func TestConditionalDialogFitsSmallViewport(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
+	model.runCommand("conditional-format")
+	view := model.View()
+	if lines := strings.Split(view, "\n"); len(lines) > 10 {
+		t.Fatalf("dialog rendered %d lines in height 10", len(lines))
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if width := ansi.StringWidth(line); width > 30 {
+			t.Fatalf("dialog line width %d exceeds viewport: %q", width, line)
+		}
+	}
+}
+
+func TestConditionalDialogSupportsTwoAndThreeColorScales(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection string
+		wantMid   string
+	}{
+		{name: "two-color", selection: "2", wantMid: ""},
+		{name: "three-color", selection: "3", wantMid: "FFFF00"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+			model.runCommand("conditional-format")
+			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model.Update(tea.KeyMsg{Type: tea.KeyRight})
+			model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(test.selection)})
+			for _, expected := range []string{"Color scale", test.selection + "-color"} {
+				if !strings.Contains(model.View(), expected) {
+					t.Fatalf("scale tab missing %q: %s", expected, model.View())
+				}
+			}
+			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			pressDialogTab(&model, 4)
+			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			rules := model.session.Workbook.Sheets[0].ConditionalRules
+			if model.ConditionalDialog.Open || len(rules) != 1 || rules[0].ColorScale == nil || rules[0].ColorScale.MidRGB != test.wantMid {
+				t.Fatalf("scale tab rule = %#v open=%t", rules, model.ConditionalDialog.Open)
+			}
+		})
+	}
+}
+
+func TestConditionalDialogAcceptsCustomRGBColor(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	pressDialogEnter(&model, 4)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for range len(model.Theme.Options()) {
+		model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.ColorPicker.EditingInput {
+		t.Fatal("custom color choice did not open RGB input")
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#12AB34")})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.ConditionalDialog.FillRGB != "12AB34" || len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 {
+		t.Fatalf("custom RGB draft = %q; workbook rules=%#v", model.ConditionalDialog.FillRGB, model.session.Workbook.Sheets[0].ConditionalRules)
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+}
+
+func newConditionalModel(t *testing.T, selection workbook.CellRange) AppModel {
+	t.Helper()
+	session, err := workbook.NewWorkbook(workbook.XLSX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	for row, value := range []string{"1", "6"} {
+		if err := workbook.SetCell(session, workbook.CellAddress{Sheet: "Sheet1", Row: row, Col: 0}, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model := NewModel(session)
+	model.Grid.Selection = selection
+	return model
+}
+
+func pressDialogEnter(model *AppModel, count int) {
+	for range count {
+		model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+}
+
+func pressDialogTab(model *AppModel, count int) {
+	for range count {
+		model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+}
+
+func chooseThemeRed(model *AppModel) {
+	model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+func draftConditionalRule(model *AppModel, value string, lessThan bool) {
+	if model.ConditionalDialog.Focus == 0 {
+		pressDialogEnter(model, 2)
+	}
+	if lessThan {
+		model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(value)})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	chooseThemeRed(model)
+	pressDialogTab(model, 2)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 }
 
 func TestBorderMenuAppliesPresetToSelectedRange(t *testing.T) {

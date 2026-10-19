@@ -44,6 +44,13 @@ type CellStyle struct {
 	Borders      BorderSet
 }
 
+// ColorScale defines the endpoint colors and optional 50th-percentile color.
+type ColorScale struct {
+	MinRGB string
+	MidRGB string
+	MaxRGB string
+}
+
 // CalculationState distinguishes literals from formula results and their validity.
 type CalculationState string
 

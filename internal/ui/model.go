@@ -24,9 +24,9 @@ type colorPickerState struct {
 type colorTarget string
 
 const (
-	fillColorTarget        colorTarget = "fill"
-	fontColorTarget        colorTarget = "font"
-	conditionalColorTarget colorTarget = "conditional"
+	fillColorTarget              colorTarget = "fill"
+	fontColorTarget              colorTarget = "font"
+	conditionalDialogColorTarget colorTarget = "conditional-dialog"
 )
 
 type pendingOperation struct {
@@ -35,27 +35,27 @@ type pendingOperation struct {
 }
 
 type AppModel struct {
-	session        *workbook.Session
-	Grid           GridViewport
-	Palette        CommandPalette
-	FunctionPicker formulaPickerState
-	keys           KeyMap
-	Theme          ThemePalette
-	ColorPicker    colorPickerState
-	toolbarVisible bool
-	width          int
-	height         int
-	editing        bool
-	editorInput    textinput.Model
-	findMode       bool
-	findQuery      string
-	themeQuery     func(uint8, time.Duration) (RGB, bool)
-	status         string
-	lastCommand    string
-	operation      pendingOperation
-	conditional    workbook.ConditionalRule
-	visibleSheet   string
-	filtersDirty   bool
+	session           *workbook.Session
+	Grid              GridViewport
+	Palette           CommandPalette
+	FunctionPicker    formulaPickerState
+	ConditionalDialog conditionalDialogState
+	keys              KeyMap
+	Theme             ThemePalette
+	ColorPicker       colorPickerState
+	toolbarVisible    bool
+	width             int
+	height            int
+	editing           bool
+	editorInput       textinput.Model
+	findMode          bool
+	findQuery         string
+	themeQuery        func(uint8, time.Duration) (RGB, bool)
+	status            string
+	lastCommand       string
+	operation         pendingOperation
+	visibleSheet      string
+	filtersDirty      bool
 }
 
 func NewModel(session *workbook.Session) AppModel {
@@ -137,7 +137,7 @@ func (model *AppModel) View() string {
 		status = fmt.Sprintf("%s%d  Ctrl+P commands  Ctrl+S save", columnName(model.Grid.Selected.Col), model.Grid.Selected.Row+1)
 	}
 	output.WriteString(statusStyle.Render(status))
-	if model.editing || model.findMode || model.ColorPicker.Open || model.operation.Mode != "" {
+	if model.editing || model.findMode || model.operation.Mode != "" {
 		output.WriteByte('\n')
 		output.WriteString(model.inputOverlay())
 	}
@@ -146,6 +146,16 @@ func (model *AppModel) View() string {
 	}
 	if model.FunctionPicker.Open {
 		return ComposeOverlay(output.String(), model.FunctionPicker.View(model.width), model.width, model.height)
+	}
+	if model.ConditionalDialog.Open {
+		view := ComposeOverlay(output.String(), model.ConditionalDialog.View(model.width, model.height), model.width, model.height)
+		if model.ColorPicker.Open {
+			return ComposeOverlay(view, model.colorPickerView(), model.width, model.height)
+		}
+		return view
+	}
+	if model.ColorPicker.Open {
+		return ComposeOverlay(output.String(), model.colorPickerView(), model.width, model.height)
 	}
 	return output.String()
 }
@@ -166,6 +176,10 @@ func (model *AppModel) handleKey(message tea.KeyMsg) {
 		if invoked {
 			model.runCommand(command)
 		}
+		return
+	}
+	if model.ConditionalDialog.Open {
+		model.handleConditionalDialogKey(message)
 		return
 	}
 	if model.FunctionPicker.Open {
@@ -348,10 +362,49 @@ func (model *AppModel) handleColorKey(message tea.KeyMsg) {
 		}
 	}
 }
+func (model *AppModel) handleConditionalDialogKey(message tea.KeyMsg) {
+	action := model.ConditionalDialog.HandleKey(message)
+	switch action {
+	case "color":
+		model.openColorPicker(conditionalDialogColorTarget)
+	case "cancel":
+		model.ColorPicker = colorPickerState{}
+		model.ConditionalDialog = conditionalDialogState{}
+	case "done":
+		_, rules, err := model.ConditionalDialog.BuildRules()
+		if err != nil {
+			model.ConditionalDialog.Error = err.Error()
+			return
+		}
+		applied := 0
+		for _, rule := range rules {
+			if rule.ColorScale != nil {
+				err = workbook.AddColorScaleRule(model.session, model.activeSheet().Name, rule.Range, *rule.ColorScale)
+			} else {
+				err = workbook.AddConditionalRule(model.session, model.activeSheet().Name, rule.Range, rule)
+			}
+			if err != nil {
+				for applied > 0 {
+					if undoErr := workbook.Undo(model.session); undoErr != nil {
+						model.ConditionalDialog.Error = fmt.Sprintf("%v; rollback failed: %v", err, undoErr)
+						return
+					}
+					applied--
+				}
+				model.ConditionalDialog.Error = err.Error()
+				return
+			}
+			applied++
+		}
+		model.ColorPicker = colorPickerState{}
+		model.ConditionalDialog = conditionalDialogState{}
+		model.status = fmt.Sprintf("Applied %d conditional formatting rule(s)", len(rules))
+	}
+}
 
 func (model *AppModel) handleMouse(message tea.MouseMsg) {
 	event := tea.MouseEvent(message)
-	if model.ColorPicker.Open || model.Palette.Open {
+	if model.ColorPicker.Open || model.Palette.Open || model.ConditionalDialog.Open {
 		return
 	}
 	if model.toolbarVisible && event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == 0 {
@@ -417,7 +470,8 @@ func (model *AppModel) runCommand(command string) {
 	case "filter":
 		model.beginOperation("filter")
 	case "conditional-format":
-		model.beginOperation("conditional")
+		model.ConditionalDialog = newConditionalDialog(model.selectedRangeName())
+		model.operation = pendingOperation{}
 	case "insert-function":
 		model.FunctionPicker = newFormulaPicker(model.selectedRangeName(), model.defaultFormulaTargetName())
 	case "border-menu":
@@ -558,15 +612,6 @@ func (model *AppModel) applyOperation(mode, input string) {
 		}
 		model.setStatus(workbook.SetFilter(model.session, sheet.Name, selection, []workbook.ColumnFilter{{Column: column, AllowedValues: allowed}}))
 		model.filtersDirty = true
-	case "conditional":
-		rule, err := parseConditionalInput(input)
-		if err != nil {
-			model.status = err.Error()
-			return
-		}
-		rule.Range = model.selectedRange()
-		model.conditional = rule
-		model.openColorPicker(conditionalColorTarget)
 	}
 }
 
@@ -604,25 +649,6 @@ func (model *AppModel) rowHasData(sheet *workbook.Sheet, row int) bool {
 	return false
 }
 
-func parseConditionalInput(input string) (workbook.ConditionalRule, error) {
-	switch {
-	case input == "blank":
-		return workbook.ConditionalRule{Operator: workbook.Blank}, nil
-	case strings.HasPrefix(input, "contains:"):
-		value := strings.TrimPrefix(input, "contains:")
-		if value != "" {
-			return workbook.ConditionalRule{Operator: workbook.TextContains, Value: value}, nil
-		}
-	case strings.HasPrefix(input, ">"):
-		return workbook.ConditionalRule{Operator: workbook.GreaterThan, Value: strings.TrimSpace(input[1:])}, nil
-	case strings.HasPrefix(input, "<"):
-		return workbook.ConditionalRule{Operator: workbook.LessThan, Value: strings.TrimSpace(input[1:])}, nil
-	case strings.HasPrefix(input, "="):
-		return workbook.ConditionalRule{Operator: workbook.Equal, Value: strings.TrimSpace(input[1:])}, nil
-	}
-	return workbook.ConditionalRule{}, fmt.Errorf("use >number, <number, =text, blank, or contains:text")
-}
-
 func (model *AppModel) openColorPicker(target colorTarget) {
 	model.ColorPicker = colorPickerState{Open: true, Target: target}
 }
@@ -631,10 +657,8 @@ func (model *AppModel) applyColor(color RGB) {
 	if model.session == nil || model.session.Workbook == nil {
 		return
 	}
-	if model.ColorPicker.Target == conditionalColorTarget {
-		model.conditional.FillRGB = strings.TrimPrefix(FormatRGBHex(color), "#")
-		model.setStatus(workbook.AddConditionalRule(model.session, model.activeSheet().Name, model.conditional.Range, model.conditional))
-		model.conditional = workbook.ConditionalRule{}
+	if model.ColorPicker.Target == conditionalDialogColorTarget {
+		model.ConditionalDialog.SetColor(strings.TrimPrefix(FormatRGBHex(color), "#"))
 		return
 	}
 	style := model.activeSheet().Cells[model.Grid.Selected].Style
@@ -650,8 +674,8 @@ func (model *AppModel) applyDefaultColor() {
 	if model.session == nil || model.session.Workbook == nil {
 		return
 	}
-	if model.ColorPicker.Target == conditionalColorTarget {
-		model.status = "Conditional formatting needs a theme or custom color"
+	if model.ColorPicker.Target == conditionalDialogColorTarget {
+		model.ConditionalDialog.Error = "Conditional formatting needs a theme or custom color"
 		return
 	}
 	style := model.activeSheet().Cells[model.Grid.Selected].Style
@@ -926,22 +950,26 @@ func (model *AppModel) inputOverlay() string {
 			return "Sort (a ascending, d descending, h no header): " + model.operation.Input + "_"
 		case "filter":
 			return "Allowed values separated by semicolons (empty clears filter): " + model.operation.Input + "_"
-		case "conditional":
-			return "Condition (>number, <number, =text, blank, contains:text): " + model.operation.Input + "_"
 		case "merge-confirm":
 			return "Merging discards cell values. Confirm? (y/n)"
 		default:
 			return ""
 		}
-	case model.ColorPicker.Open:
-		if model.ColorPicker.EditingInput {
-			return "Custom RGB (#RRGGBB): " + model.ColorPicker.Input + "_"
-		}
-		var lines []string
-		for index, option := range model.Theme.Options() {
+	default:
+		return ""
+	}
+}
+func (model *AppModel) colorPickerView() string {
+	var lines []string
+	if model.ColorPicker.EditingInput {
+		lines = append(lines, "Custom RGB color", "#"+model.ColorPicker.Input+"_", "Enter apply · Esc cancel")
+	} else {
+		lines = append(lines, "Terminal theme")
+		options := model.Theme.Options()
+		for index, option := range options {
 			prefix := "  "
 			if index == model.ColorPicker.Selected {
-				prefix = "> "
+				prefix = "› "
 			}
 			swatch := "□"
 			if !option.Default {
@@ -954,14 +982,17 @@ func (model *AppModel) inputOverlay() string {
 			lines = append(lines, prefix+swatch+" "+option.Name)
 		}
 		prefix := "  "
-		if model.ColorPicker.Selected == len(model.Theme.Options()) {
-			prefix = "> "
+		if model.ColorPicker.Selected == len(options) {
+			prefix = "› "
 		}
-		lines = append(lines, prefix+"Add custom RGB…")
-		return strings.Join(lines, "\n")
-	default:
-		return ""
+		lines = append(lines, prefix+"＋ Add custom RGB…", "↑/↓ navigate · Enter select · Esc close")
 	}
+	popup := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ANSIColor(6)).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+	return popup
 }
 
 func (model *AppModel) setStatus(err error) {

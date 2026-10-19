@@ -2,6 +2,8 @@ package workbook
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -20,11 +22,12 @@ const (
 
 // ConditionalRule stores one range-scoped rule and its display colors.
 type ConditionalRule struct {
-	Range    CellRange
-	Operator RuleOperator
-	Value    string
-	FillRGB  string
-	FontRGB  string
+	Range      CellRange
+	Operator   RuleOperator
+	Value      string
+	FillRGB    string
+	FontRGB    string
+	ColorScale *ColorScale
 }
 
 // AddConditionalRule applies and stores a supported conditional-format rule.
@@ -146,7 +149,16 @@ func EffectiveStyle(sheet *Sheet, address Coord) CellStyle {
 		value = cell.Result
 	}
 	for _, rule := range sheet.ConditionalRules {
-		if !rangeContains(rule.Range, address) || !conditionalMatches(rule, value) {
+		if !rangeContains(rule.Range, address) {
+			continue
+		}
+		if rule.ColorScale != nil {
+			if fill, ok := colorScaleFill(sheet, rule, value); ok {
+				style.FillRGB = fill
+			}
+			continue
+		}
+		if !conditionalMatches(rule, value) {
 			continue
 		}
 		if rule.FillRGB != "" {
@@ -159,6 +171,81 @@ func EffectiveStyle(sheet *Sheet, address Coord) CellStyle {
 	return style
 }
 
+func colorScaleFill(sheet *Sheet, rule ConditionalRule, value string) (string, bool) {
+	scale := rule.ColorScale
+	if scale == nil {
+		return "", false
+	}
+	current, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return "", false
+	}
+	values := make([]float64, 0)
+	for row := rule.Range.Start.Row; row <= rule.Range.End.Row; row++ {
+		for col := rule.Range.Start.Col; col <= rule.Range.End.Col; col++ {
+			cell := sheet.Cells[Coord{Row: row, Col: col}]
+			cellValue := cell.Input
+			if strings.HasPrefix(cellValue, "=") {
+				if cell.CalculationState != Current {
+					continue
+				}
+				cellValue = cell.Result
+			}
+			number, parseErr := strconv.ParseFloat(cellValue, 64)
+			if parseErr == nil {
+				values = append(values, number)
+			}
+		}
+	}
+	if len(values) == 0 {
+		return "", false
+	}
+	sort.Float64s(values)
+	minimum, maximum := values[0], values[len(values)-1]
+	median := values[len(values)/2]
+	if len(values)%2 == 0 {
+		median = (values[len(values)/2-1] + median) / 2
+	}
+	if minimum == maximum {
+		if scale.MidRGB != "" {
+			return normalizeStoredColor(scale.MidRGB), true
+		}
+		return interpolateRGB(scale.MinRGB, scale.MaxRGB, 0.5), true
+	}
+	if scale.MidRGB == "" {
+		return interpolateRGB(scale.MinRGB, scale.MaxRGB, (current-minimum)/(maximum-minimum)), true
+	}
+	if current <= median {
+		if median == minimum {
+			return normalizeStoredColor(scale.MidRGB), true
+		}
+		return interpolateRGB(scale.MinRGB, scale.MidRGB, (current-minimum)/(median-minimum)), true
+	}
+	if maximum == median {
+		return normalizeStoredColor(scale.MidRGB), true
+	}
+	return interpolateRGB(scale.MidRGB, scale.MaxRGB, (current-median)/(maximum-median)), true
+}
+
+func interpolateRGB(start, end string, ratio float64) string {
+	start, startErr := normalizeRGB(start)
+	end, endErr := normalizeRGB(end)
+	if startErr != nil || endErr != nil {
+		return ""
+	}
+	startChannels := [3]uint64{}
+	endChannels := [3]uint64{}
+	for index := range startChannels {
+		startChannels[index], _ = strconv.ParseUint(start[index*2:index*2+2], 16, 8)
+		endChannels[index], _ = strconv.ParseUint(end[index*2:index*2+2], 16, 8)
+	}
+	ratio = math.Max(0, math.Min(1, ratio))
+	return fmt.Sprintf("%02X%02X%02X",
+		uint8(math.Round(float64(startChannels[0])+(float64(endChannels[0])-float64(startChannels[0]))*ratio)),
+		uint8(math.Round(float64(startChannels[1])+(float64(endChannels[1])-float64(startChannels[1]))*ratio)),
+		uint8(math.Round(float64(startChannels[2])+(float64(endChannels[2])-float64(startChannels[2]))*ratio)),
+	)
+}
 func conditionalMatches(rule ConditionalRule, value string) bool {
 	switch rule.Operator {
 	case GreaterThan:

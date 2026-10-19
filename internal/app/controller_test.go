@@ -295,6 +295,39 @@ func TestSaveAsPickerKeepsCSVLossWarning(t *testing.T) {
 	}
 }
 
+func TestLoadCompleteHydratesColorScales(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "color-scale.xlsx")
+	source, err := workbook.NewWorkbook(workbook.XLSX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SetCell(source, workbook.CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}, "10"); err != nil {
+		t.Fatal(err)
+	}
+	selection := workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{}}
+	scale := workbook.ColorScale{MinRGB: "FF0000", MidRGB: "FFFF00", MaxRGB: "00FF00"}
+	if err := workbook.AddColorScaleRule(source, "Sheet1", selection, scale); err != nil {
+		t.Fatalf("AddColorScaleRule: %v", err)
+	}
+	if err := workbook.SaveFile(source, path); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := workbook.OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	t.Cleanup(func() { _ = loaded.Close() })
+	controller := NewController("")
+	controller.Update(loadCompleteMsg{path: path, session: loaded})
+	rules := controller.session.Workbook.Sheets[0].ConditionalRules
+	if len(rules) != 1 || rules[0].ColorScale == nil || *rules[0].ColorScale != scale {
+		t.Fatalf("load completion did not hydrate color scale: %#v", rules)
+	}
+}
+
 func openPicker(t *testing.T, controller *Controller, directory string) {
 	t.Helper()
 	t.Chdir(directory)

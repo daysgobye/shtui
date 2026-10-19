@@ -133,6 +133,13 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			controller.status = fmt.Sprintf("Open %q failed: %v", message.path, message.err)
 			return controller, nil
 		}
+		if err := workbook.LoadColorScales(message.session); err != nil {
+			if message.session != nil {
+				_ = message.session.Close()
+			}
+			controller.status = fmt.Sprintf("Open %q failed while loading color scales: %v", message.path, err)
+			return controller, nil
+		}
 		old := controller.session
 		controller.session = message.session
 		controller.path = message.path
