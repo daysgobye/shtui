@@ -244,6 +244,22 @@ func TestConditionalDialogTwoColorScaleSkipsHiddenMidpoint(t *testing.T) {
 	}
 }
 
+func TestConditionalDialogTwoColorScaleSummaryOmitsMidpoint(t *testing.T) {
+	dialog := newConditionalDialog("A1:A2")
+	dialog.Mode = conditionalColorScale
+	dialog.setThreeColor(false)
+	dialog.Focus = dialog.addFocus()
+	dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := ansi.Strip(dialog.View(80, 24))
+	if !strings.Contains(view, "1. Color scale #CD0000 → #00CD00") {
+		t.Fatalf("two-color summary omits min/max colors: %q", view)
+	}
+	if strings.Contains(view, "choose color") {
+		t.Fatalf("two-color summary shows a nonexistent midpoint: %q", view)
+	}
+}
+
 func TestConditionalDialogDoesNotDuplicateAddedColorScaleDraft(t *testing.T) {
 	dialog := newConditionalDialog("A1:A2")
 	dialog.Mode = conditionalColorScale

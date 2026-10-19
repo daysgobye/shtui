@@ -743,6 +743,9 @@ func (dialog *conditionalDialogState) activateMouseControl(control conditionalDi
 func conditionalRuleSummary(index int, rule workbook.ConditionalRule) string {
 	if rule.ColorScale != nil {
 		scale := rule.ColorScale
+		if scale.MidRGB == "" {
+			return fmt.Sprintf("%d. Color scale %s → %s", index+1, colorName(scale.MinRGB), colorName(scale.MaxRGB))
+		}
 		return fmt.Sprintf("%d. Color scale %s → %s → %s", index+1, colorName(scale.MinRGB), colorName(scale.MidRGB), colorName(scale.MaxRGB))
 	}
 	label := "Condition"
