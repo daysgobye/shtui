@@ -405,7 +405,11 @@ func (model *AppModel) handleConditionalDialogKey(message tea.KeyMsg) {
 
 func (model *AppModel) handleMouse(message tea.MouseMsg) {
 	event := tea.MouseEvent(message)
-	if model.ColorPicker.Open || model.Palette.Open || model.ConditionalDialog.Open {
+	if model.ColorPicker.Open {
+		model.handleColorPickerMouse(message)
+		return
+	}
+	if model.Palette.Open || model.ConditionalDialog.Open {
 		return
 	}
 	if model.toolbarVisible && event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == 0 {

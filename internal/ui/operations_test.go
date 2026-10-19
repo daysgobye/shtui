@@ -262,6 +262,32 @@ func TestConditionalDialogAcceptsCustomRGBColor(t *testing.T) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 }
 
+func TestNestedColorPickerMouseUpdatesDraftOnly(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.width, model.height = 80, 24
+	model.runCommand("conditional-format")
+	pressDialogEnter(&model, 4)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.ColorPicker.Open {
+		t.Fatal("conditional fill control did not open color picker")
+	}
+	x, y := renderedTextPosition(t, &model, "Red")
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+
+	if model.ColorPicker.Open || !model.ConditionalDialog.Open {
+		t.Fatalf("nested picker state: pickerOpen=%t dialogOpen=%t, want false/true", model.ColorPicker.Open, model.ConditionalDialog.Open)
+	}
+	if model.ConditionalDialog.FillRGB != FormatRGBHex(ResolveThemeColor(1, nil))[1:] {
+		t.Fatalf("conditional draft fill = %q, want Red theme color", model.ConditionalDialog.FillRGB)
+	}
+	if got := model.activeSheet().ConditionalRules; len(got) != 0 {
+		t.Fatalf("nested picker applied workbook rules before Done: %#v", got)
+	}
+}
+
 func newConditionalModel(t *testing.T, selection workbook.CellRange) AppModel {
 	t.Helper()
 	session, err := workbook.NewWorkbook(workbook.XLSX)

@@ -108,3 +108,77 @@ func TestTrueColorAndDefaultTerminalBackground(t *testing.T) {
 		t.Fatal("initial screen paints a fixed terminal background")
 	}
 }
+
+func TestColorPickerMouseSelectsThemeOption(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.width, model.height = 80, 24
+	wantColor := RGB{R: 0x12, G: 0x34, B: 0x56}
+	queried := false
+	model.themeQuery = func(index uint8, _ time.Duration) (RGB, bool) {
+		queried = true
+		if index != 1 {
+			t.Errorf("theme query index = %d, want Red slot 1", index)
+		}
+		return wantColor, true
+	}
+	model.openColorPicker(fillColorTarget)
+	x, y := renderedTextPosition(t, &model, "Red")
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+
+	got := model.activeSheet().Cells[workbook.Coord{}].Style.FillRGB
+	if model.ColorPicker.Open || !queried || got != "123456" {
+		t.Fatalf("theme click: pickerOpen=%t queried=%t fill=%q, want closed, queried, 123456", model.ColorPicker.Open, queried, got)
+	}
+}
+
+func TestColorPickerMouseOpensCustomRGB(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.width, model.height = 80, 24
+	model.openColorPicker(fillColorTarget)
+	x, y := renderedTextPosition(t, &model, "Add custom RGB")
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+
+	if !model.ColorPicker.Open || !model.ColorPicker.EditingInput {
+		t.Fatalf("custom RGB click: pickerOpen=%t editing=%t, want both true", model.ColorPicker.Open, model.ColorPicker.EditingInput)
+	}
+	if got := model.activeSheet().Cells[workbook.Coord{}].Style; got != (workbook.CellStyle{}) {
+		t.Fatalf("opening custom RGB changed cell style: %#v", got)
+	}
+}
+
+func TestColorPickerOutsideClickDismissesWithoutApplying(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.width, model.height = 80, 24
+	cell := model.activeSheet().Cells[workbook.Coord{}]
+	cell.Style.FillRGB = "AABBCC"
+	model.activeSheet().Cells[workbook.Coord{}] = cell
+	model.openColorPicker(fillColorTarget)
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: 0, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+
+	if model.ColorPicker.Open {
+		t.Fatal("outside click left color picker open")
+	}
+	if got := model.activeSheet().Cells[workbook.Coord{}].Style.FillRGB; got != "AABBCC" {
+		t.Fatalf("outside click changed fill to %q, want AABBCC", got)
+	}
+}
+
+func renderedTextPosition(t *testing.T, model *AppModel, target string) (int, int) {
+	t.Helper()
+	for y, line := range strings.Split(model.View(), "\n") {
+		if index := strings.Index(line, target); index >= 0 {
+			return lipgloss.Width(line[:index]), y
+		}
+	}
+	t.Fatalf("rendered view has no %q: %q", target, model.View())
+	return 0, 0
+}

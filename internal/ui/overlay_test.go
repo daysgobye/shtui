@@ -36,6 +36,19 @@ func TestComposeOverlayClampsToSmallViewport(t *testing.T) {
 	}
 }
 
+func TestOverlayBoundsMatchesComposePlacement(t *testing.T) {
+	popup := "XX\nYY"
+	bounds := overlayBounds(popup, 12, 5)
+	if want := (overlayRect{X: 5, Y: 1, Width: 2, Height: 2}); bounds != want {
+		t.Fatalf("overlayBounds = %+v, want %+v", bounds, want)
+	}
+
+	lines := strings.Split(ComposeOverlay("AAAAAAAAAAAA\nBBBBBBBBBBBB\nCCCCCCCCCCCC\nDDDDDDDDDDDD\nEEEEEEEEEEEE", popup, 12, 5), "\n")
+	if lines[bounds.Y] != "BBBBBXXBBBBB" || lines[bounds.Y+1] != "CCCCCYYCCCCC" {
+		t.Fatalf("ComposeOverlay placement disagrees with bounds %+v: %q", bounds, lines)
+	}
+}
+
 func TestPaletteOverlayPreservesHeadersWhenToolbarHidden(t *testing.T) {
 	model := NewModel(&workbook.Session{Workbook: &workbook.Workbook{Sheets: []workbook.Sheet{{Name: "Sheet1"}}}})
 	model.toolbarVisible = false

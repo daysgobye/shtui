@@ -6,13 +6,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// ComposeOverlay draws a clipped, centered popup over the existing terminal view.
-// Rows outside the popup footprint are returned unchanged.
-func ComposeOverlay(base, popup string, width, height int) string {
+type overlayRect struct {
+	X      int
+	Y      int
+	Width  int
+	Height int
+}
+
+func overlayBounds(popup string, width, height int) overlayRect {
 	if width <= 0 || height <= 0 {
-		return ""
+		return overlayRect{}
 	}
-	baseRows := strings.Split(base, "\n")
 	popupRows := strings.Split(popup, "\n")
 	popupWidth := 0
 	for _, row := range popupRows {
@@ -21,27 +25,42 @@ func ComposeOverlay(base, popup string, width, height int) string {
 	popupWidth = min(popupWidth, width)
 	popupHeight := min(len(popupRows), height)
 	if popupWidth == 0 || popupHeight == 0 {
+		return overlayRect{}
+	}
+	return overlayRect{
+		X: (width - popupWidth) / 2, Y: (height - popupHeight) / 2,
+		Width: popupWidth, Height: popupHeight,
+	}
+}
+
+// ComposeOverlay draws a clipped, centered popup over the existing terminal view.
+// Rows outside the popup footprint are returned unchanged.
+func ComposeOverlay(base, popup string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	bounds := overlayBounds(popup, width, height)
+	if bounds.Width == 0 || bounds.Height == 0 {
 		return base
 	}
-
-	x := (width - popupWidth) / 2
-	y := (height - popupHeight) / 2
-	for row := range popupHeight {
-		baseIndex := y + row
+	baseRows := strings.Split(base, "\n")
+	popupRows := strings.Split(popup, "\n")
+	for row := range bounds.Height {
+		baseIndex := bounds.Y + row
 		for len(baseRows) <= baseIndex {
 			baseRows = append(baseRows, "")
 		}
-		left := ansi.Cut(baseRows[baseIndex], 0, x)
+		left := ansi.Cut(baseRows[baseIndex], 0, bounds.X)
 		leftWidth := ansi.StringWidth(left)
-		if leftWidth < x {
-			left += strings.Repeat(" ", x-leftWidth)
+		if leftWidth < bounds.X {
+			left += strings.Repeat(" ", bounds.X-leftWidth)
 		}
-		overlay := ansi.Cut(popupRows[row], 0, popupWidth)
+		overlay := ansi.Cut(popupRows[row], 0, bounds.Width)
 		overlayWidth := ansi.StringWidth(overlay)
-		if overlayWidth < popupWidth {
-			overlay += strings.Repeat(" ", popupWidth-overlayWidth)
+		if overlayWidth < bounds.Width {
+			overlay += strings.Repeat(" ", bounds.Width-overlayWidth)
 		}
-		right := ansi.Cut(baseRows[baseIndex], x+popupWidth, width)
+		right := ansi.Cut(baseRows[baseIndex], bounds.X+bounds.Width, width)
 		baseRows[baseIndex] = left + overlay + right
 	}
 	return strings.Join(baseRows, "\n")
