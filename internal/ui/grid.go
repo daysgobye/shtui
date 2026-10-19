@@ -187,7 +187,7 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 		output.WriteString(columnHeader.Width(grid.columnWidth(col, sheet) - 1).Render(truncate(columnName(col), grid.columnWidth(col, sheet)-1)))
 	}
 	output.WriteByte('\n')
-	output.WriteString(grid.horizontalBoundary(sheet, columns, -1, grid.ScrollRow))
+	output.WriteString(grid.horizontalBoundary(sheet, styleResolver, columns, -1, grid.ScrollRow))
 
 	rowCount := max((height-grid.HeaderHeight)/2, 0)
 	for line := range rowCount {
@@ -211,7 +211,7 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 					spanWidth += grid.columnWidth(columns[next], sheet)
 				}
 			}
-			boundary := grid.verticalBoundary(sheet, row, columns, index)
+			boundary := grid.verticalBoundary(sheet, styleResolver, row, columns, index)
 			output.WriteString(boundary)
 			contentWidth := max(spanWidth-1, 1)
 			value := ""
@@ -250,53 +250,78 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 			}
 		}
 		output.WriteByte('\n')
-		output.WriteString(grid.horizontalBoundary(sheet, columns, row, row+1))
+		output.WriteString(grid.horizontalBoundary(sheet, styleResolver, columns, row, row+1))
 	}
 	return output.String()
 }
 
-func (grid *GridViewport) horizontalBoundary(sheet *workbook.Sheet, columns []int, upperRow, lowerRow int) string {
+func (grid *GridViewport) horizontalBoundary(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, columns []int, upperRow, lowerRow int) string {
 	var line strings.Builder
 	line.WriteString(strings.Repeat(" ", grid.RowHeaderWidth-1))
 	for index, col := range columns {
-		if index == 0 || !grid.mergedAcrossColumns(sheet, lowerRow, columns[index-1], col) {
-			line.WriteString("┼")
-		} else {
-			line.WriteByte(' ')
-		}
 		width := grid.columnWidth(col, sheet) - 1
-		if grid.mergedAcrossRows(sheet, upperRow, lowerRow, col) {
+		mergedAcrossRows := grid.mergedAcrossRows(sheet, upperRow, lowerRow, col)
+		border := workbook.BorderStyle{}
+		fill := ""
+		if !mergedAcrossRows {
+			border = grid.horizontalBorder(sheet, col, upperRow, lowerRow)
+			fillRow := upperRow
+			if fillRow < 0 || fillRow >= sheet.Rows {
+				fillRow = lowerRow
+			}
+			fill = grid.boundaryFill(sheet, styleResolver, workbook.Coord{Row: fillRow, Col: col})
+		}
+		if mergedAcrossRows || (index > 0 && grid.mergedAcrossColumns(sheet, lowerRow, columns[index-1], col)) {
+			line.WriteByte(' ')
+		} else {
+			line.WriteString(grid.styleBorderGlyph(border, fill, "┼"))
+		}
+		if mergedAcrossRows {
 			line.WriteString(strings.Repeat(" ", width))
 			continue
 		}
-		border := workbook.BorderStyle{}
-		if upperRow >= 0 && upperRow < sheet.Rows {
-			border = sheet.Cells[workbook.Coord{Row: upperRow, Col: col}].Style.Borders.Bottom
-		}
-		if lowerRow >= 0 && lowerRow < sheet.Rows && border.Preset == "" {
-			border = sheet.Cells[workbook.Coord{Row: lowerRow, Col: col}].Style.Borders.Top
-		}
-		line.WriteString(grid.horizontalStroke(border, width))
+		line.WriteString(grid.horizontalStroke(border, width, fill))
 	}
 	return line.String()
 }
 
-func (grid *GridViewport) verticalBoundary(sheet *workbook.Sheet, row int, columns []int, index int) string {
+func (grid *GridViewport) horizontalBorder(sheet *workbook.Sheet, col, upperRow, lowerRow int) workbook.BorderStyle {
+	border := workbook.BorderStyle{}
+	if upperRow >= 0 && upperRow < sheet.Rows {
+		border = sheet.Cells[workbook.Coord{Row: upperRow, Col: col}].Style.Borders.Bottom
+	}
+	if lowerRow >= 0 && lowerRow < sheet.Rows && border.Preset == "" {
+		border = sheet.Cells[workbook.Coord{Row: lowerRow, Col: col}].Style.Borders.Top
+	}
+	return border
+}
+
+func (grid *GridViewport) verticalBoundary(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, row int, columns []int, index int) string {
 	col := columns[index]
 	if index > 0 && grid.mergedAcrossColumns(sheet, row, columns[index-1], col) {
 		return " "
 	}
 	border := sheet.Cells[workbook.Coord{Row: row, Col: col}].Style.Borders.Left
+	fillCol := col
 	if index > 0 {
 		previous := sheet.Cells[workbook.Coord{Row: row, Col: columns[index-1]}].Style.Borders.Right
 		if previous.Preset != "" && previous.Preset != "none" {
 			border = previous
 		}
+		fillCol = columns[index-1]
 	}
-	return grid.verticalStroke(border)
+	fill := grid.boundaryFill(sheet, styleResolver, workbook.Coord{Row: row, Col: fillCol})
+	return grid.verticalStroke(border, fill)
 }
 
-func (grid *GridViewport) verticalStroke(border workbook.BorderStyle) string {
+func (grid *GridViewport) boundaryFill(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, coord workbook.Coord) string {
+	if merge, ok := mergeAt(sheet, coord); ok {
+		coord = merge.Start
+	}
+	return styleResolver.StyleAt(coord).FillRGB
+}
+
+func (grid *GridViewport) verticalStroke(border workbook.BorderStyle, fill string) string {
 	glyph := "│"
 	switch strings.ToLower(border.Preset) {
 	case "thick", "medium":
@@ -308,10 +333,10 @@ func (grid *GridViewport) verticalStroke(border workbook.BorderStyle) string {
 	case "dotted":
 		glyph = "┊"
 	}
-	return grid.styleBorderGlyph(border, glyph)
+	return grid.styleBorderGlyph(border, fill, glyph)
 }
 
-func (grid *GridViewport) horizontalStroke(border workbook.BorderStyle, width int) string {
+func (grid *GridViewport) horizontalStroke(border workbook.BorderStyle, width int, fill string) string {
 	glyph := "─"
 	switch strings.ToLower(border.Preset) {
 	case "thick", "medium":
@@ -323,19 +348,34 @@ func (grid *GridViewport) horizontalStroke(border workbook.BorderStyle, width in
 	case "dotted":
 		glyph = "┈"
 	}
-	return grid.styleBorderGlyph(border, strings.Repeat(glyph, max(width, 0)))
+	return grid.styleBorderGlyph(border, fill, strings.Repeat(glyph, max(width, 0)))
 }
 
-func (grid *GridViewport) styleBorderGlyph(border workbook.BorderStyle, glyph string) string {
-	if border.Preset == "" || border.Preset == "none" {
-		return glyph
+func (grid *GridViewport) styleBorderGlyph(border workbook.BorderStyle, fill, glyph string) string {
+	style := lipgloss.NewStyle()
+	styled := false
+	if border.Preset != "" && border.Preset != "none" {
+		if border.ColorRGB != "" {
+			if color, err := ParseRGBHex("#" + border.ColorRGB); err == nil {
+				style = style.Foreground(TerminalColor(color, supportsTrueColor()))
+			} else {
+				style = style.Foreground(ANSIColor(7))
+			}
+		} else {
+			style = style.Foreground(ANSIColor(7))
+		}
+		styled = true
 	}
-	if border.ColorRGB != "" {
-		if color, err := ParseRGBHex("#" + border.ColorRGB); err == nil {
-			return lipgloss.NewStyle().Foreground(TerminalColor(color, supportsTrueColor())).Render(glyph)
+	if fill != "" {
+		if color, err := ParseRGBHex("#" + fill); err == nil {
+			style = style.Background(TerminalColor(color, supportsTrueColor()))
+			styled = true
 		}
 	}
-	return lipgloss.NewStyle().Foreground(ANSIColor(7)).Render(glyph)
+	if !styled {
+		return glyph
+	}
+	return style.Render(glyph)
 }
 
 func mergeAt(sheet *workbook.Sheet, coord workbook.Coord) (workbook.CellRange, bool) {

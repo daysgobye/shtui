@@ -3,11 +3,209 @@ package ui
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"omasheet/internal/workbook"
 )
+
+func TestGridFillTouchesCellBoundaries(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 40, 4)
+	fill := "123456"
+	border := workbook.BorderStyle{Preset: "thick", ColorRGB: "FF0000"}
+	sheet := &workbook.Sheet{
+		Rows: 1,
+		Cols: 1,
+		Cells: map[workbook.Coord]workbook.Cell{{}: {Input: "x", Style: workbook.CellStyle{
+			FillRGB: fill,
+			Borders: workbook.BorderSet{Top: border, Bottom: border, Left: border, Right: border},
+		}}},
+	}
+	rows := strings.Split(grid.View(sheet, 4), "\n")
+	if len(rows) != 4 {
+		t.Fatalf("rendered rows = %d, want 4: %q", len(rows), rows)
+	}
+	fillColor, err := ParseRGBHex("#" + fill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	borderColor, err := ParseRGBHex("#" + border.ColorRGB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVertical := lipgloss.NewStyle().
+		Foreground(TerminalColor(borderColor, supportsTrueColor())).
+		Background(TerminalColor(fillColor, supportsTrueColor())).
+		Render("┃")
+	wantHorizontal := lipgloss.NewStyle().
+		Foreground(TerminalColor(borderColor, supportsTrueColor())).
+		Background(TerminalColor(fillColor, supportsTrueColor())).
+		Render("━")
+	assertRenderedBoundary(t, rows[2], grid.RowHeaderWidth-1, "┃", wantVertical)
+	assertRenderedBoundary(t, rows[1], grid.RowHeaderWidth, "━", wantHorizontal)
+	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth, "━", wantHorizontal)
+}
+
+func TestGridSharedBoundaryUsesLeftAndUpperFill(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 40, 8)
+	leftFill, rightFill := "FF0000", "0000FF"
+	sheet := &workbook.Sheet{
+		Rows: 2,
+		Cols: 2,
+		Cells: map[workbook.Coord]workbook.Cell{
+			{Row: 0, Col: 0}: {Style: workbook.CellStyle{FillRGB: leftFill}},
+			{Row: 0, Col: 1}: {Style: workbook.CellStyle{FillRGB: rightFill}},
+			{Row: 1, Col: 0}: {Style: workbook.CellStyle{FillRGB: "00FF00"}},
+			{Row: 1, Col: 1}: {Style: workbook.CellStyle{FillRGB: "FFFF00"}},
+		},
+	}
+	rows := strings.Split(grid.View(sheet, 8), "\n")
+	leftColor, err := ParseRGBHex("#" + leftFill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightColor, err := ParseRGBHex("#" + rightFill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRenderedBoundary(t, rows[2], grid.RowHeaderWidth-1+defaultColumnWidth, "│",
+		lipgloss.NewStyle().Background(TerminalColor(leftColor, supportsTrueColor())).Render("│"))
+	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth, "─",
+		lipgloss.NewStyle().Background(TerminalColor(leftColor, supportsTrueColor())).Render("─"))
+	assertRenderedBoundary(t, rows[3], grid.RowHeaderWidth+defaultColumnWidth, "─",
+		lipgloss.NewStyle().Background(TerminalColor(rightColor, supportsTrueColor())).Render("─"))
+}
+
+func TestFilledMergedCellKeepsOuterBorders(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 50, 6)
+	fill := "345678"
+	border := workbook.BorderStyle{Preset: "thick", ColorRGB: "FF0000"}
+	sheet := &workbook.Sheet{
+		Rows: 3,
+		Cols: 3,
+		Cells: map[workbook.Coord]workbook.Cell{
+			{}: {Input: "joined", Style: workbook.CellStyle{
+				FillRGB: fill,
+				Borders: workbook.BorderSet{Top: border, Left: border},
+			}},
+			{Row: 0, Col: 1}: {Style: workbook.CellStyle{Borders: workbook.BorderSet{Right: border}}},
+			{Row: 1, Col: 0}: {Style: workbook.CellStyle{Borders: workbook.BorderSet{Bottom: border, Left: border}}},
+			{Row: 1, Col: 1}: {Style: workbook.CellStyle{Borders: workbook.BorderSet{Right: border, Bottom: border}}},
+		},
+		Merges: []workbook.CellRange{{Start: workbook.Coord{}, End: workbook.Coord{Row: 1, Col: 1}}},
+	}
+	rows := strings.Split(grid.View(sheet, 6), "\n")
+	if !strings.Contains(ansi.Strip(rows[1]), "━") || !strings.Contains(ansi.Strip(rows[5]), "━") {
+		t.Fatalf("merged cell lost outer horizontal borders: top=%q bottom=%q", ansi.Strip(rows[1]), ansi.Strip(rows[5]))
+	}
+	if !strings.Contains(ansi.Strip(rows[2]), "┃") || !strings.Contains(ansi.Strip(rows[4]), "┃") {
+		t.Fatalf("merged cell lost outer vertical borders: first=%q second=%q", ansi.Strip(rows[2]), ansi.Strip(rows[4]))
+	}
+	for x := grid.RowHeaderWidth - 1; x < grid.RowHeaderWidth+2*defaultColumnWidth-1; x++ {
+		glyph, style := renderedCellAt(rows[3], x)
+		if glyph != " " || colorParameters(style) != "" {
+			t.Fatalf("merged interior boundary at x=%d = %q with colors %q; want an unstyled space", x, glyph, colorParameters(style))
+		}
+	}
+	fillColor, err := ParseRGBHex("#" + fill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	borderColor, err := ParseRGBHex("#" + border.ColorRGB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRenderedBoundary(t, rows[5], grid.RowHeaderWidth, "━",
+		lipgloss.NewStyle().Foreground(TerminalColor(borderColor, supportsTrueColor())).
+			Background(TerminalColor(fillColor, supportsTrueColor())).Render("━"))
+}
+
+func assertRenderedBoundary(t *testing.T, line string, x int, glyph, want string) {
+	t.Helper()
+	gotGlyph, gotStyle := renderedCellAt(line, x)
+	wantGlyph, wantStyle := renderedCellAt(want, 0)
+	if gotGlyph != glyph || wantGlyph != glyph {
+		t.Fatalf("boundary at x=%d = %q; want %q", x, gotGlyph, glyph)
+	}
+	if colorParameters(gotStyle) != colorParameters(wantStyle) {
+		t.Fatalf("boundary at x=%d colors = %q; want %q", x, colorParameters(gotStyle), colorParameters(wantStyle))
+	}
+}
+
+func renderedCellAt(line string, target int) (string, string) {
+	var style strings.Builder
+	for position := 0; position < len(line); {
+		if strings.HasPrefix(line[position:], "\x1b[") {
+			end := strings.IndexByte(line[position:], 'm')
+			if end < 0 {
+				break
+			}
+			sequence := line[position : position+end+1]
+			params := strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m")
+			if params == "0" {
+				style.Reset()
+			} else {
+				style.WriteString(sequence)
+			}
+			position += end + 1
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[position:])
+		if target == 0 {
+			return string(r), style.String()
+		}
+		target--
+		position += size
+	}
+	return "", ""
+}
+
+func colorParameters(style string) string {
+	var colors []string
+	for position := 0; position < len(style); {
+		if !strings.HasPrefix(style[position:], "\x1b[") {
+			position++
+			continue
+		}
+		sequenceEnd := strings.IndexByte(style[position:], 'm')
+		if sequenceEnd < 0 {
+			break
+		}
+		params := strings.TrimSuffix(strings.TrimPrefix(style[position:position+sequenceEnd+1], "\x1b["), "m")
+		values := strings.Split(params, ";")
+		for index := 0; index < len(values); index++ {
+			if values[index] != "38" && values[index] != "48" {
+				continue
+			}
+			count := 1
+			if index+1 < len(values) {
+				switch values[index+1] {
+				case "5":
+					count = 3
+				case "2":
+					count = 5
+				}
+			}
+			colorEnd := min(index+count, len(values))
+			colors = append(colors, strings.Join(values[index:colorEnd], ";"))
+			index = colorEnd - 1
+		}
+		position += sequenceEnd + 1
+	}
+	return strings.Join(colors, "|")
+}
 
 func TestGridCoordinateMappingWithScrollOffsets(t *testing.T) {
 	grid := NewGridViewport()
