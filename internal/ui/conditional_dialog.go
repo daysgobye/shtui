@@ -301,6 +301,10 @@ func (dialog *conditionalDialogState) View(width, height int) string {
 	frameWidth := min(76, max(width-4, 1))
 	innerWidth := max(frameWidth-4, 1)
 	compact := width <= 42 || height <= 12
+	if height <= 10 {
+		return dialog.tinyView(innerWidth)
+	}
+	dialog.RangeInput.Prompt = "Apply to range: "
 	dialog.RangeInput.Width = max(innerWidth-18, 1)
 	dialog.ValueInput.Width = max(innerWidth-12, 1)
 	accent := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6))
@@ -336,6 +340,63 @@ func (dialog *conditionalDialogState) View(width, height int) string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ANSIColor(6)).Padding(0, 1).Width(innerWidth).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+func (dialog *conditionalDialogState) tinyView(width int) string {
+	dialog.RangeInput.Prompt = "Range: "
+	dialog.RangeInput.Width = max(width-8, 1)
+	dialog.ValueInput.Width = max(width-8, 1)
+	selected := func(value string, focused bool) string {
+		style := lipgloss.NewStyle()
+		if focused {
+			style = style.Reverse(true).Bold(true)
+		}
+		return style.Render(value)
+	}
+	header := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6)).Render("Cond: ") +
+		selected("Single", dialog.Focus == 1 && dialog.Mode == conditionalSingleColor) + " / " +
+		selected("Scale", dialog.Focus == 1 && dialog.Mode == conditionalColorScale)
+	lines := []string{header, dialog.RangeInput.View()}
+	if dialog.Mode == conditionalColorScale {
+		variant := "3-color"
+		if !dialog.ThreeColor {
+			variant = "2-color"
+		}
+		lines = append(lines,
+			selected(variant, dialog.Focus == 1),
+			selected("Min:"+compactColor(dialog.Scale.MinRGB), dialog.Focus == 2),
+		)
+		if dialog.ThreeColor {
+			lines = append(lines, selected("Mid:"+compactColor(dialog.Scale.MidRGB), dialog.Focus == 3))
+		}
+		lines = append(lines, selected("Max:"+compactColor(dialog.Scale.MaxRGB), dialog.Focus == 4))
+	} else {
+		operator := ">"
+		switch conditionalOperators[dialog.Operator].operator {
+		case workbook.LessThan:
+			operator = "<"
+		case workbook.Equal:
+			operator = "="
+		case workbook.Blank:
+			operator = "blank"
+		case workbook.TextContains:
+			operator = "contains"
+		}
+		lines = append(lines,
+			selected("If "+operator, dialog.Focus == 2),
+			dialog.ValueInput.View(),
+			selected("F:"+compactColor(dialog.FillRGB), dialog.Focus == 4)+" "+selected("T:"+compactColor(dialog.FontRGB), dialog.Focus == 5),
+			truncate("Preview: "+dialog.Preview(), max(width-2, 1)),
+		)
+	}
+	if dialog.Error != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(truncate(dialog.Error, max(width-2, 1))))
+	}
+	addFocus, doneFocus, cancelFocus := 6, 7, 8
+	if dialog.Mode == conditionalColorScale {
+		addFocus, doneFocus, cancelFocus = 5, 6, 7
+	}
+	lines = append(lines, selected("+Rule", dialog.Focus == addFocus)+" "+selected("Done", dialog.Focus == doneFocus)+" "+selected("Cancel", dialog.Focus == cancelFocus))
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ANSIColor(6)).Padding(0, 1).Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (dialog *conditionalDialogState) Preview() string {

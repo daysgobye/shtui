@@ -136,6 +136,7 @@ func (model *AppModel) View() string {
 	if status == "" {
 		status = fmt.Sprintf("%s%d  Ctrl+P commands  Ctrl+S save", columnName(model.Grid.Selected.Col), model.Grid.Selected.Row+1)
 	}
+	status = truncate(status, max(model.width, 1))
 	output.WriteString(statusStyle.Render(status))
 	if model.editing || model.findMode || model.operation.Mode != "" {
 		output.WriteByte('\n')

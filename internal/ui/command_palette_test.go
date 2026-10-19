@@ -74,3 +74,11 @@ func TestPaletteSearchMatchesActionAndKeybinding(t *testing.T) {
 		}
 	}
 }
+func TestCommandPaletteShowsActionsBeforeSearch(t *testing.T) {
+	palette := NewCommandPalette(DefaultKeyMap())
+	palette.Show()
+	view := palette.View(80)
+	if !strings.Contains(view, "Toggle toolbar") {
+		t.Fatalf("opening palette did not show available commands before filtering: %q", view)
+	}
+}

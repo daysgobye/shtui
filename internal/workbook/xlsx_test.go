@@ -151,3 +151,29 @@ func packagePart(t *testing.T, path, name string) []byte {
 	}
 	return nil
 }
+func TestOpenXLSXRecalculatesSupportedFormula(t *testing.T) {
+	session, err := NewWorkbook(XLSX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	sheet := session.Workbook.Sheets[0].Name
+	for row, value := range []string{"1", "2", "=SUM(A1:A2)"} {
+		if err := SetCell(session, CellAddress{Sheet: sheet, Row: row, Col: 0}, value); err != nil {
+			t.Fatalf("SetCell row %d: %v", row, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "formula.xlsx")
+	if err := SaveFile(session, path); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	reopened, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	cell := reopened.Workbook.Sheets[0].Cells[Coord{Row: 2}]
+	if cell.Result != "3" || cell.CalculationState != Current {
+		t.Fatalf("reopened formula = (%q, %q), want (3, current)", cell.Result, cell.CalculationState)
+	}
+}

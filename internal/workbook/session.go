@@ -58,7 +58,11 @@ func OpenFile(path string) (*Session, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Session{Workbook: workbook, Path: path, Format: CSV}, nil
+		session := &Session{Workbook: workbook, Path: path, Format: CSV}
+		if err := recalculateLoadedFormulas(session); err != nil {
+			return nil, fmt.Errorf("recalculate formulas in %q: %w", path, err)
+		}
+		return session, nil
 	}
 
 	file, err := excelize.OpenFile(path)
@@ -75,7 +79,22 @@ func OpenFile(path string) (*Session, error) {
 		file.Close()
 		return nil, err
 	}
-	return &Session{Workbook: workbook, Path: path, Format: format, OriginalParts: parts, file: file}, nil
+	session := &Session{Workbook: workbook, Path: path, Format: format, OriginalParts: parts, file: file}
+	if err := recalculateLoadedFormulas(session); err != nil {
+		_ = session.Close()
+		return nil, fmt.Errorf("recalculate formulas in %q: %w", path, err)
+	}
+	return session, nil
+}
+func recalculateLoadedFormulas(session *Session) error {
+	for _, sheet := range session.Workbook.Sheets {
+		for coord, cell := range sheet.Cells {
+			if strings.HasPrefix(cell.Input, "=") {
+				return Recalculate(session, CellAddress{Sheet: sheet.Name, Row: coord.Row, Col: coord.Col})
+			}
+		}
+	}
+	return nil
 }
 
 // Close releases Excelize resources held by the session.

@@ -167,12 +167,32 @@ func TestConditionalDialogFitsSmallViewport(t *testing.T) {
 	model.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	model.runCommand("conditional-format")
 	view := model.View()
+	for _, action := range []string{"Done", "Cancel"} {
+		if !strings.Contains(view, action) {
+			t.Fatalf("height-10 dialog hid the %q action: %q", action, view)
+		}
+	}
 	if lines := strings.Split(view, "\n"); len(lines) > 10 {
 		t.Fatalf("dialog rendered %d lines in height 10", len(lines))
 	}
 	for _, line := range strings.Split(view, "\n") {
 		if width := ansi.StringWidth(line); width > 30 {
 			t.Fatalf("dialog line width %d exceeds viewport: %q", width, line)
+		}
+	}
+	model.ConditionalDialog.Mode = conditionalColorScale
+	view = model.View()
+	for _, action := range []string{"Done", "Cancel"} {
+		if !strings.Contains(view, action) {
+			t.Fatalf("height-10 color-scale dialog hid the %q action: %q", action, view)
+		}
+	}
+	if lines := strings.Split(view, "\n"); len(lines) > 10 {
+		t.Fatalf("color-scale dialog rendered %d lines in height 10", len(lines))
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if width := ansi.StringWidth(line); width > 30 {
+			t.Fatalf("color-scale dialog line width %d exceeds viewport: %q", width, line)
 		}
 	}
 }

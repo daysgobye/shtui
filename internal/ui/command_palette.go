@@ -113,6 +113,7 @@ func (palette *CommandPalette) Show() {
 	palette.Query = ""
 	palette.Selected = 0
 	palette.list.ResetFilter()
+	palette.list.SetFilterText(palette.Query)
 	palette.list.SetFilterState(list.Filtering)
 	palette.list.Select(0)
 }
