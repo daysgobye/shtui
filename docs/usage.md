@@ -1,12 +1,12 @@
-# OmaSheet usage
+# Shtui usage
 
-OmaSheet is a compiled Go terminal spreadsheet for CSV and XLSX files. It uses a virtualized grid and targets workbooks up to roughly 25,000 rows by 20 columns per sheet; larger files may work but are not a performance guarantee.
+Shtui is a compiled Go terminal spreadsheet for CSV and XLSX files. It uses a virtualized grid and targets workbooks up to roughly 25,000 rows by 20 columns per sheet; larger files may work but are not a performance guarantee.
 
 ## Build and launch
 
 ```sh
-go build -o omasheet ./cmd/omasheet
-./omasheet [workbook.csv|workbook.xlsx]
+go build -o shtui ./cmd/omasheet
+./shtui [workbook.csv|workbook.xlsx]
 ```
 
 With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook** from the home screen or command palette. Loading and saving run asynchronously. A failed open keeps the current workbook; a failed save keeps it dirty and reports the cause. **Save as** chooses a new path but does not convert between CSV and XLSX; keep the destination extension consistent with the current workbook.
@@ -37,6 +37,6 @@ Ctrl+P opens the centered, searchable command palette over the current sheet. Se
 
 ## File format behavior
 
-CSV contains one sheet and has no native styles, merges, formulas, or workbook metadata. Formula source is saved as CSV text; formatting and other-sheet content cannot be represented. OmaSheet warns before a CSV save that would discard styles or extra sheets.
+CSV contains one sheet and has no native styles, merges, formulas, or workbook metadata. Formula source is saved as CSV text; formatting and other-sheet content cannot be represented. Shtui warns before a CSV save that would discard styles or extra sheets.
 
-XLSX retains workbook content through Excelize, including content not directly editable in the terminal UI when the library can round-trip it. OmaSheet does not execute macros and does not implement all Excel features. Formula calculation and conditional-format evaluation are limited to the supported subset. Keep backups of workbooks that depend on unsupported Excel features; do not assume every Excel-specific feature is editable or recalculated by OmaSheet.
+XLSX retains workbook content through Excelize, including content not directly editable in the terminal UI when the library can round-trip it. Shtui does not execute macros and does not implement all Excel features. Formula calculation and conditional-format evaluation are limited to the supported subset. Keep backups of workbooks that depend on unsupported Excel features; do not assume every Excel-specific feature is editable or recalculated by Shtui.

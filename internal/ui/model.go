@@ -40,6 +40,7 @@ type AppModel struct {
 	Palette           CommandPalette
 	FunctionPicker    formulaPickerState
 	ConditionalDialog conditionalDialogState
+	home              homeScreen
 	keys              KeyMap
 	Theme             ThemePalette
 	ColorPicker       colorPickerState
@@ -70,6 +71,7 @@ func NewModel(session *workbook.Session) AppModel {
 		session:        session,
 		Grid:           NewGridViewport(),
 		Palette:        NewCommandPalette(keys),
+		home:           newHomeScreen(),
 		Theme:          NewThemePalette(),
 		keys:           keys,
 		editorInput:    editor,
@@ -109,10 +111,7 @@ func (model *AppModel) View() string {
 	}
 	model.layout()
 	if model.session == nil || model.session.Workbook == nil || len(model.session.Workbook.Sheets) == 0 {
-		content := "OmaSheet\nOpen or create a CSV or XLSX workbook.\n\nUse: omasheet <path>\nCtrl+P  Command palette"
-		if model.toolbarVisible {
-			content = model.toolbarView() + "\n" + content
-		}
+		content := model.home.View(model.width, model.height)
 		if model.Palette.Open {
 			return ComposeOverlay(content, model.Palette.View(model.width), model.width, model.height)
 		}
@@ -208,7 +207,10 @@ func (model *AppModel) handleKey(message tea.KeyMsg) {
 		model.ToggleToolbar()
 		return
 	}
-	if model.session == nil || model.session.Workbook == nil {
+	if model.session == nil || model.session.Workbook == nil || len(model.session.Workbook.Sheets) == 0 {
+		if action := model.home.HandleKey(message); action != "" {
+			model.runCommand(action)
+		}
 		return
 	}
 	switch {
@@ -420,11 +422,14 @@ func (model *AppModel) handleMouse(message tea.MouseMsg) {
 		model.handleConditionalDialogAction(action)
 		return
 	}
-	if model.toolbarVisible && event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == 0 {
-		model.runCommand(toolbarActionAt(event.X))
+	if model.session == nil || model.session.Workbook == nil || len(model.session.Workbook.Sheets) == 0 {
+		if action := model.home.HandleMouse(message); action != "" {
+			model.runCommand(action)
+		}
 		return
 	}
-	if model.session == nil || model.session.Workbook == nil {
+	if model.toolbarVisible && event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == 0 {
+		model.runCommand(toolbarActionAt(event.X))
 		return
 	}
 	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == model.sheetTabsY() {
@@ -776,6 +781,7 @@ func (model *AppModel) layout() {
 		model.height = 24
 	}
 	model.editorInput.Width = max(model.width-16, 1)
+	model.home.width, model.home.height = model.width, model.height
 	originY := model.topLines()
 	gridHeight := max(model.height-originY-2, 1)
 	model.Grid.SetBounds(0, originY, model.width, gridHeight)

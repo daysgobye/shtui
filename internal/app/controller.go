@@ -186,6 +186,13 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		_, command := controller.view.Update(message)
 		action := controller.view.TakeCommand()
 		return controller, controller.handleAction(action, command)
+	case tea.MouseMsg:
+		if controller.loading && controller.session == nil {
+			return controller, nil
+		}
+		_, command := controller.view.Update(message)
+		action := controller.view.TakeCommand()
+		return controller, controller.handleAction(action, command)
 	default:
 		_, command := controller.view.Update(message)
 		return controller, command
@@ -197,14 +204,11 @@ func (controller *Controller) View() string {
 		return ""
 	}
 	if controller.loading && controller.session == nil {
-		return "OmaSheet\nLoading " + controller.loadingPath + "…"
+		return "shtui\nLoading " + controller.loadingPath + "…"
 	}
 
-	var content string
-	if controller.session == nil {
-		content = "OmaSheet\nOpen or create a workbook\n\nO  Open file\nN  New CSV\nX  New XLSX\nCtrl+P  Command palette\nCtrl+C  Quit"
-	} else {
-		content = controller.view.View()
+	content := controller.view.View()
+	if controller.session != nil {
 		switch {
 		case controller.confirmCSVLoss:
 			content += "\nCSV warning: " + strings.Join(controller.csvLossWarnings(), "; ") + ". Press Enter or Y to continue, Esc to cancel."
@@ -215,8 +219,7 @@ func (controller *Controller) View() string {
 		case controller.status != "":
 			content += "\n" + controller.status
 		}
-	}
-	if controller.status != "" && controller.session == nil {
+	} else if controller.status != "" {
 		content += "\n" + controller.status
 	}
 	if controller.pickerOpen {

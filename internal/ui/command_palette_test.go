@@ -29,7 +29,7 @@ func TestCommandPaletteOpensWithToolbarHiddenAndSearchInvokesAction(t *testing.T
 }
 
 func TestToolbarCanBeToggledFromViewAction(t *testing.T) {
-	model := NewModel(nil)
+	model := NewModel(&workbook.Session{Workbook: &workbook.Workbook{Sheets: []workbook.Sheet{{Name: "Sheet1", Cells: map[workbook.Coord]workbook.Cell{}}}}})
 	viewX := -1
 	for x := range 100 {
 		if toolbarActionAt(x) == "view" {

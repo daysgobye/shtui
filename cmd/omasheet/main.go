@@ -12,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) > 2 {
-		fmt.Fprintln(os.Stderr, "usage: omasheet [workbook.csv|workbook.xlsx|workbook.xlsm]")
+		fmt.Fprintln(os.Stderr, "usage: shtui [workbook.csv|workbook.xlsx|workbook.xlsm]")
 		os.Exit(2)
 	}
 	path := ""

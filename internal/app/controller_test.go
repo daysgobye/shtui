@@ -1,15 +1,45 @@
 package app
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+	"omasheet/internal/ui"
+	"omasheet/internal/workbook"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
-	"omasheet/internal/ui"
-	"omasheet/internal/workbook"
 )
+
+func TestWelcomeMouseCreatesCSVWorkbook(t *testing.T) {
+	controller := NewController("")
+	x, y := controllerActionPoint(t, controller.View(), "New CSV")
+	controller.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if controller.session == nil || controller.session.Format != workbook.CSV {
+		t.Fatalf("clicking New CSV did not create a CSV workbook: %#v", controller.session)
+	}
+	t.Cleanup(func() { _ = controller.session.Close() })
+}
+
+func TestWelcomeMouseStartsOpenPicker(t *testing.T) {
+	controller := NewController("")
+	x, y := controllerActionPoint(t, controller.View(), "Open workbook")
+	_, command := controller.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if !controller.pickerOpen || command == nil {
+		t.Fatalf("clicking Open workbook: pickerOpen=%t command=%t", controller.pickerOpen, command != nil)
+	}
+}
+
+func controllerActionPoint(t *testing.T, view, label string) (int, int) {
+	t.Helper()
+	for y, line := range strings.Split(ansi.Strip(view), "\n") {
+		if x := strings.Index(line, label); x >= 0 {
+			return x, y
+		}
+	}
+	t.Fatalf("rendered controller view has no %q action: %q", label, ansi.Strip(view))
+	return 0, 0
+}
 
 func TestPathLaunchOpensSelectedFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.csv")
@@ -50,7 +80,7 @@ func TestPathLaunchOpensXLSXFormat(t *testing.T) {
 func TestNoPathScreenCreatesCSVWorkbook(t *testing.T) {
 	controller := NewController("")
 	view := controller.View()
-	if !strings.Contains(view, "Open file") || !strings.Contains(view, "New CSV") {
+	if !strings.Contains(view, "Open workbook") || !strings.Contains(view, "New CSV") {
 		t.Fatalf("no-path screen lacks open/create actions: %q", view)
 	}
 	controller.newWorkbook(workbook.CSV)

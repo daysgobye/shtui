@@ -6,8 +6,67 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"omasheet/internal/workbook"
 )
+
+func TestWelcomeScreenUsesShtuiBrandAndFitsViewport(t *testing.T) {
+	model := NewModel(nil)
+	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 30, Height: 10}} {
+		model.Update(size)
+		view := strings.TrimRight(ansi.Strip(model.View()), "\n")
+		if !strings.Contains(strings.ToLower(view), "shtui") {
+			t.Fatalf("welcome screen lacks Shtui brand at %dx%d: %q", size.Width, size.Height, view)
+		}
+		for _, action := range []string{"Open workbook", "New CSV", "New XLSX"} {
+			if !strings.Contains(view, action) {
+				t.Errorf("welcome screen lacks %q at %dx%d: %q", action, size.Width, size.Height, view)
+			}
+		}
+		if !strings.Contains(view, "Ctrl+P") || !strings.Contains(view, "Enter") {
+			t.Errorf("welcome screen lacks keyboard hints at %dx%d: %q", size.Width, size.Height, view)
+		}
+		lines := strings.Split(view, "\n")
+		if len(lines) > size.Height {
+			t.Errorf("welcome screen height = %d at %dx%d", len(lines), size.Width, size.Height)
+		}
+		for index, line := range lines {
+			if width := lipgloss.Width(line); width > size.Width {
+				t.Errorf("welcome screen line %d width = %d at %dx%d", index, width, size.Width, size.Height)
+			}
+		}
+	}
+}
+
+func TestWelcomeScreenMouseSelectsWorkbookAction(t *testing.T) {
+	model := NewModel(nil)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	x, y := renderedActionPoint(t, model.View(), "New CSV")
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if action := model.TakeCommand(); action != "new-csv" {
+		t.Fatalf("clicking New CSV emitted %q, want new-csv", action)
+	}
+}
+
+func TestWelcomeScreenKeyboardChoosesSelectedAction(t *testing.T) {
+	model := NewModel(nil)
+	model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action := model.TakeCommand(); action != "new-csv" {
+		t.Fatalf("down then Enter emitted %q, want new-csv", action)
+	}
+}
+
+func renderedActionPoint(t *testing.T, view, label string) (int, int) {
+	t.Helper()
+	for y, line := range strings.Split(ansi.Strip(view), "\n") {
+		if x := strings.Index(line, label); x >= 0 {
+			return x, y
+		}
+	}
+	t.Fatalf("rendered view has no %q action: %q", label, ansi.Strip(view))
+	return 0, 0
+}
 
 func TestCellEditorAcceptsSpaceUnicodeAndPaste(t *testing.T) {
 	model := newInteractionModel(t, 1)
