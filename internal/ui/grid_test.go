@@ -436,6 +436,65 @@ func TestGridCellAtMapsContentAndSeparatorLines(t *testing.T) {
 	}
 }
 
+func TestCellAtNormalizesMergedCoordinatesToAnchor(t *testing.T) {
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 60, 10)
+	sheet := &workbook.Sheet{
+		Rows:   3,
+		Cols:   4,
+		Merges: []workbook.CellRange{{Start: workbook.Coord{}, End: workbook.Coord{Row: 1, Col: 2}}},
+	}
+	for _, point := range []struct {
+		name string
+		x    int
+		y    int
+	}{
+		{name: "anchor", x: 6, y: 2},
+		{name: "interior", x: 16, y: 4},
+		{name: "final cell", x: 26, y: 4},
+	} {
+		t.Run(point.name, func(t *testing.T) {
+			coord, ok := grid.CellAt(point.x, point.y, sheet)
+			if !ok || coord != (workbook.Coord{}) {
+				t.Fatalf("CellAt(%d,%d) = %v, %t; want merge anchor A1", point.x, point.y, coord, ok)
+			}
+		})
+	}
+}
+
+func TestMergedTextWrapsWithinExistingArea(t *testing.T) {
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 60, 10)
+	sheet := &workbook.Sheet{
+		Rows: 4,
+		Cols: 3,
+		Cells: map[workbook.Coord]workbook.Cell{
+			{}:               {Input: "alpha 東京 bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor"},
+			{Row: 0, Col: 2}: {Input: "OUTSIDE"},
+		},
+		Merges: []workbook.CellRange{{Start: workbook.Coord{}, End: workbook.Coord{Row: 2, Col: 1}}},
+	}
+	lines := strings.Split(ansi.Strip(grid.View(sheet, 10)), "\n")
+	if len(lines) < 7 || !strings.Contains(lines[2], "alpha") {
+		t.Fatalf("merged text is not top-aligned in first content line: %q", lines)
+	}
+	if !strings.Contains(lines[3], "charlie") || !strings.Contains(lines[4], "foxtrot") {
+		t.Fatalf("merged text did not wrap across the merge interior: separator=%q next row=%q", lines[3], lines[4])
+	}
+	if !strings.Contains(lines[6], "…") {
+		t.Fatalf("overflowing merged text lacks an ellipsis on its last interior line: %q", lines[6])
+	}
+	outsideByte := strings.Index(lines[2], "OUTSIDE")
+	if outsideByte < 0 {
+		t.Fatalf("neighbor cell content missing from merged row: %q", lines[2])
+	}
+	gotColumn := ansi.StringWidth(lines[2][:outsideByte])
+	wantColumn := grid.RowHeaderWidth + 2*defaultColumnWidth
+	if gotColumn != wantColumn {
+		t.Fatalf("neighbor cell begins at display column %d, want %d; line=%q", gotColumn, wantColumn, lines[2])
+	}
+}
+
 func TestColumnResizeAcceptsBoundaryHitZone(t *testing.T) {
 	sheet := &workbook.Sheet{Rows: 1, Cols: 3}
 	for _, offset := range []int{-1, 0, 1} {

@@ -715,7 +715,24 @@ func (model *AppModel) applyCellStyle(style workbook.CellStyle) {
 }
 
 func (model *AppModel) moveSelection(rowDelta, colDelta int) {
-	selected := model.Grid.Selected
+	sheet := model.activeSheet()
+	selected := normalizeToMergeAnchor(sheet, model.Grid.Selected)
+	if merge, ok := mergeAt(sheet, selected); ok {
+		if colDelta > 0 {
+			selected.Col = merge.End.Col + 1
+			colDelta = 0
+		} else if colDelta < 0 {
+			selected.Col = max(merge.Start.Col-1, 0)
+			colDelta = 0
+		}
+		if rowDelta > 0 {
+			selected.Row = merge.End.Row + 1
+			rowDelta = 0
+		} else if rowDelta < 0 {
+			selected.Row = max(merge.Start.Row-1, 0)
+			rowDelta = 0
+		}
+	}
 	if rowDelta != 0 && len(model.Grid.VisibleRowIndexes) > 0 {
 		visible := model.Grid.VisibleRowIndexes
 		position := sort.SearchInts(visible, selected.Row)
@@ -734,6 +751,9 @@ func (model *AppModel) moveSelection(rowDelta, colDelta int) {
 }
 
 func (model *AppModel) selectCell(coord workbook.Coord) {
+	if sheet := model.activeSheet(); sheet != nil {
+		coord = normalizeToMergeAnchor(sheet, coord)
+	}
 	model.Grid.Selected = coord
 	model.Grid.Selection = workbook.CellRange{Start: coord, End: coord}
 	model.ensureSelectedVisible()

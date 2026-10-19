@@ -131,6 +131,37 @@ func TestTabCommitsAndMovesRight(t *testing.T) {
 	}
 }
 
+func TestKeyboardMovementSkipsMergedInterior(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	merge := workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 2, Col: 2}}
+	model.activeSheet().Merges = []workbook.CellRange{merge}
+
+	model.selectCell(workbook.Coord{Row: 1, Col: 1})
+	if model.Grid.Selected != merge.Start {
+		t.Fatalf("selectCell inside merge selected %v; want anchor %v", model.Grid.Selected, merge.Start)
+	}
+	model.Grid.Selected = merge.Start
+	model.moveSelection(0, 1)
+	if want := (workbook.Coord{Row: 0, Col: 3}); model.Grid.Selected != want {
+		t.Fatalf("moving right from merge selected %v; want first cell after merge %v", model.Grid.Selected, want)
+	}
+	model.Grid.Selected = merge.Start
+	model.moveSelection(1, 0)
+	if want := (workbook.Coord{Row: 3, Col: 0}); model.Grid.Selected != want {
+		t.Fatalf("moving down from merge selected %v; want first cell below merge %v", model.Grid.Selected, want)
+	}
+	model.Grid.Selected = workbook.Coord{Row: 0, Col: 3}
+	model.moveSelection(0, -1)
+	if model.Grid.Selected != merge.Start {
+		t.Fatalf("moving left into merge selected %v; want anchor %v", model.Grid.Selected, merge.Start)
+	}
+	model.Grid.Selected = workbook.Coord{Row: 3, Col: 0}
+	model.moveSelection(-1, 0)
+	if model.Grid.Selected != merge.Start {
+		t.Fatalf("moving up into merge selected %v; want anchor %v", model.Grid.Selected, merge.Start)
+	}
+}
+
 func TestSheetNavigationSupportsKeyboardAndMouseTabs(t *testing.T) {
 	model := newInteractionModel(t, 2)
 	model.session.Workbook.ActiveSheet = 0

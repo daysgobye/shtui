@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"omasheet/internal/workbook"
 )
 
@@ -75,7 +76,7 @@ func (grid *GridViewport) CellAt(screenX, screenY int, sheet *workbook.Sheet) (w
 		}
 		row = grid.VisibleRowIndexes[row]
 	}
-	return workbook.Coord{Row: row, Col: col}, true
+	return normalizeToMergeAnchor(sheet, workbook.Coord{Row: row, Col: col}), true
 }
 
 // HandleMouse updates selection, scroll, or a column drag. Resize is reported once on release.
@@ -181,13 +182,14 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 	columnHeader := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6))
 	rowHeader := lipgloss.NewStyle().Foreground(ANSIColor(8))
 	columns := grid.visibleColumns(sheet)
+	mergedLines := make(map[workbook.Coord][]string)
 	output.WriteString(strings.Repeat(" ", grid.RowHeaderWidth-1))
 	for _, col := range columns {
 		output.WriteString("│")
 		output.WriteString(columnHeader.Width(grid.columnWidth(col, sheet) - 1).Render(truncate(columnName(col), grid.columnWidth(col, sheet)-1)))
 	}
 	output.WriteByte('\n')
-	output.WriteString(grid.horizontalBoundary(sheet, styleResolver, columns, -1, grid.ScrollRow))
+	output.WriteString(grid.horizontalBoundary(sheet, styleResolver, columns, -1, grid.ScrollRow, mergedLines))
 
 	rowCount := max((height-grid.HeaderHeight)/2, 0)
 	for line := range rowCount {
@@ -205,43 +207,29 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 			col := columns[index]
 			merge, merged := mergeAt(sheet, workbook.Coord{Row: row, Col: col})
 			spanWidth := grid.columnWidth(col, sheet)
-			topLeft := !merged || (row == merge.Start.Row && col == merge.Start.Col)
-			if merged && topLeft {
+			mergeStart := merged && col == merge.Start.Col
+			if mergeStart {
 				for next := index + 1; next < len(columns) && columns[next] <= merge.End.Col; next++ {
 					spanWidth += grid.columnWidth(columns[next], sheet)
 				}
 			}
-			boundary := grid.verticalBoundary(sheet, styleResolver, row, columns, index)
-			output.WriteString(boundary)
-			contentWidth := max(spanWidth-1, 1)
-			value := ""
 			cellCoord := workbook.Coord{Row: row, Col: col}
-			if topLeft {
-				cell := sheet.Cells[cellCoord]
-				value = cell.Input
-				if strings.HasPrefix(value, "=") && cell.CalculationState == workbook.Current {
-					value = cell.Result
-				}
-				style := lipgloss.NewStyle().Bold(cell.Style.Bold)
-				effective := styleResolver.StyleAt(cellCoord)
-				if effective.FontRGB != "" {
-					if color, err := ParseRGBHex("#" + effective.FontRGB); err == nil {
-						style = style.Foreground(TerminalColor(color, supportsTrueColor()))
-					}
-				}
-				if effective.FillRGB != "" {
-					if color, err := ParseRGBHex("#" + effective.FillRGB); err == nil {
-						style = style.Background(TerminalColor(color, supportsTrueColor()))
-					}
-				}
-				if coordInRange(cellCoord, grid.Selection) {
-					style = style.Reverse(true)
-				}
-				output.WriteString(style.Width(contentWidth).Render(truncate(value, contentWidth)))
-			} else {
+			if mergeStart && row == merge.Start.Row {
+				mergedLines[cellCoord] = grid.wrapMergedText(sheet, merge, spanWidth)
+			}
+			output.WriteString(grid.verticalBoundary(sheet, styleResolver, row, columns, index))
+			contentWidth := max(spanWidth-1, 1)
+			switch {
+			case mergeStart:
+				value := mergedTextLine(mergedLines[merge.Start], 2*(row-merge.Start.Row))
+				output.WriteString(grid.cellTextStyle(sheet, styleResolver, merge.Start).Width(contentWidth).Render(truncate(value, contentWidth)))
+			case !merged:
+				value := displayCellValue(sheet.Cells[cellCoord])
+				output.WriteString(grid.cellTextStyle(sheet, styleResolver, cellCoord).Width(contentWidth).Render(truncate(value, contentWidth)))
+			default:
 				output.WriteString(strings.Repeat(" ", contentWidth))
 			}
-			if merged && topLeft {
+			if mergeStart {
 				for index < len(columns) && columns[index] <= merge.End.Col {
 					index++
 				}
@@ -250,45 +238,112 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 			}
 		}
 		output.WriteByte('\n')
-		output.WriteString(grid.horizontalBoundary(sheet, styleResolver, columns, row, row+1))
+		output.WriteString(grid.horizontalBoundary(sheet, styleResolver, columns, row, row+1, mergedLines))
 	}
 	return output.String()
 }
 
-func (grid *GridViewport) horizontalBoundary(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, columns []int, upperRow, lowerRow int) string {
+func (grid *GridViewport) wrapMergedText(sheet *workbook.Sheet, merge workbook.CellRange, spanWidth int) []string {
+	contentWidth := max(spanWidth-1, 1)
+	value := displayCellValue(sheet.Cells[merge.Start])
+	var lines []string
+	for _, line := range strings.Split(ansi.Wordwrap(value, contentWidth, " "), "\n") {
+		if ansi.StringWidth(line) > contentWidth {
+			lines = append(lines, strings.Split(ansi.Hardwrap(line, contentWidth, false), "\n")...)
+		} else {
+			lines = append(lines, line)
+		}
+	}
+	maxLines := max(2*(merge.End.Row-merge.Start.Row+1)-1, 1)
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		lines[maxLines-1] = ansi.Truncate(lines[maxLines-1], max(contentWidth-1, 0), "") + "…"
+	}
+	return lines
+}
+
+func displayCellValue(cell workbook.Cell) string {
+	if strings.HasPrefix(cell.Input, "=") && cell.CalculationState == workbook.Current {
+		return cell.Result
+	}
+	return cell.Input
+}
+
+func mergedTextLine(lines []string, index int) string {
+	if index < 0 || index >= len(lines) {
+		return ""
+	}
+	return lines[index]
+}
+
+func (grid *GridViewport) cellTextStyle(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, coord workbook.Coord) lipgloss.Style {
+	cell := sheet.Cells[coord]
+	style := lipgloss.NewStyle().Bold(cell.Style.Bold)
+	effective := styleResolver.StyleAt(coord)
+	if effective.FontRGB != "" {
+		if color, err := ParseRGBHex("#" + effective.FontRGB); err == nil {
+			style = style.Foreground(TerminalColor(color, supportsTrueColor()))
+		}
+	}
+	if effective.FillRGB != "" {
+		if color, err := ParseRGBHex("#" + effective.FillRGB); err == nil {
+			style = style.Background(TerminalColor(color, supportsTrueColor()))
+		}
+	}
+	if coordInRange(coord, grid.Selection) {
+		style = style.Reverse(true)
+	}
+	return style
+}
+
+func (grid *GridViewport) horizontalBoundary(sheet *workbook.Sheet, styleResolver *workbook.EffectiveStyleResolver, columns []int, upperRow, lowerRow int, mergedLines map[workbook.Coord][]string) string {
 	var line strings.Builder
 	line.WriteString(strings.Repeat(" ", grid.RowHeaderWidth-1))
-	for index, col := range columns {
+	for index := 0; index < len(columns); {
+		col := columns[index]
 		width := grid.columnWidth(col, sheet) - 1
 		mergedAcrossRows := grid.mergedAcrossRows(sheet, upperRow, lowerRow, col)
-		border := workbook.BorderStyle{}
+		if mergedAcrossRows {
+			merge, _ := mergeAt(sheet, workbook.Coord{Row: upperRow, Col: col})
+			spanWidth := width + 1
+			next := index + 1
+			for next < len(columns) && columns[next] <= merge.End.Col {
+				spanWidth += grid.columnWidth(columns[next], sheet)
+				next++
+			}
+			contentWidth := max(spanWidth-1, 1)
+			line.WriteByte(' ')
+			if col == merge.Start.Col {
+				value := mergedTextLine(mergedLines[merge.Start], 2*(upperRow-merge.Start.Row)+1)
+				line.WriteString(grid.cellTextStyle(sheet, styleResolver, merge.Start).Width(contentWidth).Render(truncate(value, contentWidth)))
+			} else {
+				line.WriteString(strings.Repeat(" ", contentWidth))
+			}
+			index = next
+			continue
+		}
+		border := grid.horizontalBorder(sheet, col, upperRow, lowerRow)
 		fill := ""
 		junctionFill := ""
-		if !mergedAcrossRows {
-			border = grid.horizontalBorder(sheet, col, upperRow, lowerRow)
-			if upperRow >= 0 && upperRow < sheet.Rows && lowerRow >= 0 && lowerRow < sheet.Rows {
-				fill = grid.sharedBoundaryFill(sheet, styleResolver,
+		if upperRow >= 0 && upperRow < sheet.Rows && lowerRow >= 0 && lowerRow < sheet.Rows {
+			fill = grid.sharedBoundaryFill(sheet, styleResolver,
+				workbook.Coord{Row: upperRow, Col: col},
+				workbook.Coord{Row: lowerRow, Col: col})
+			if index > 0 {
+				junctionFill = grid.junctionBoundaryFill(sheet, styleResolver,
+					workbook.Coord{Row: upperRow, Col: columns[index-1]},
 					workbook.Coord{Row: upperRow, Col: col},
+					workbook.Coord{Row: lowerRow, Col: columns[index-1]},
 					workbook.Coord{Row: lowerRow, Col: col})
-				if index > 0 {
-					junctionFill = grid.junctionBoundaryFill(sheet, styleResolver,
-						workbook.Coord{Row: upperRow, Col: columns[index-1]},
-						workbook.Coord{Row: upperRow, Col: col},
-						workbook.Coord{Row: lowerRow, Col: columns[index-1]},
-						workbook.Coord{Row: lowerRow, Col: col})
-				}
 			}
 		}
-		if mergedAcrossRows || (index > 0 && grid.mergedAcrossColumns(sheet, lowerRow, columns[index-1], col)) {
+		if index > 0 && grid.mergedAcrossColumns(sheet, lowerRow, columns[index-1], col) {
 			line.WriteByte(' ')
 		} else {
 			line.WriteString(grid.styleBorderGlyph(border, junctionFill, "┼"))
 		}
-		if mergedAcrossRows {
-			line.WriteString(strings.Repeat(" ", width))
-			continue
-		}
 		line.WriteString(grid.horizontalStroke(border, width, fill))
+		index++
 	}
 	return line.String()
 }
@@ -423,6 +478,13 @@ func mergeAt(sheet *workbook.Sheet, coord workbook.Coord) (workbook.CellRange, b
 		}
 	}
 	return workbook.CellRange{}, false
+}
+
+func normalizeToMergeAnchor(sheet *workbook.Sheet, coord workbook.Coord) workbook.Coord {
+	if merge, ok := mergeAt(sheet, coord); ok {
+		return merge.Start
+	}
+	return coord
 }
 
 func (grid *GridViewport) mergedAcrossColumns(sheet *workbook.Sheet, row, leftCol, rightCol int) bool {
