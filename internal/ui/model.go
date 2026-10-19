@@ -36,6 +36,7 @@ type AppModel struct {
 	session        *workbook.Session
 	Grid           GridViewport
 	Palette        CommandPalette
+	keys           KeyMap
 	Theme          ThemePalette
 	ColorPicker    colorPickerState
 	toolbarVisible bool
@@ -55,10 +56,13 @@ type AppModel struct {
 }
 
 func NewModel(session *workbook.Session) AppModel {
+	keys := DefaultKeyMap()
 	return AppModel{
 		session:        session,
 		Grid:           NewGridViewport(),
+		Palette:        NewCommandPalette(keys),
 		Theme:          NewThemePalette(),
+		keys:           keys,
 		toolbarVisible: true,
 		width:          80,
 		height:         24,
@@ -100,7 +104,7 @@ func (model *AppModel) View() string {
 			content = model.toolbarView() + "\n" + content
 		}
 		if model.Palette.Open {
-			return model.Palette.View(model.width)
+			return ComposeOverlay(content, model.Palette.View(model.width), model.width, model.height)
 		}
 		return content
 	}
@@ -128,13 +132,13 @@ func (model *AppModel) View() string {
 		output.WriteString(model.inputOverlay())
 	}
 	if model.Palette.Open {
-		return model.Palette.View(model.width)
+		return ComposeOverlay(output.String(), model.Palette.View(model.width), model.width, model.height)
 	}
 	return output.String()
 }
 
 func (model *AppModel) handleKey(message tea.KeyMsg) {
-	if message.Type == tea.KeyCtrlP {
+	if model.keys.Matches(message, model.keys.OpenPalette) {
 		model.Palette.Show()
 		model.findMode = false
 		model.ColorPicker.Open = false

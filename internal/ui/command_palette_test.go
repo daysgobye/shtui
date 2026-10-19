@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -48,5 +49,28 @@ func TestToolbarCanBeToggledFromViewAction(t *testing.T) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !model.toolbarVisible {
 		t.Fatal("command palette did not restore the toolbar")
+	}
+}
+func TestPaletteSearchMatchesActionAndKeybinding(t *testing.T) {
+	palette := NewCommandPalette(DefaultKeyMap())
+	for _, test := range []struct {
+		query    string
+		wantName string
+		wantKey  string
+	}{
+		{query: "undo", wantName: "Undo", wantKey: "Ctrl+Z"},
+		{query: "Ctrl+S", wantName: "Save", wantKey: "Ctrl+S"},
+	} {
+		palette.Show()
+		palette.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(test.query)})
+		view := palette.View(80)
+		if !strings.Contains(view, test.wantName) || !strings.Contains(view, test.wantKey) {
+			visible := make([]string, 0)
+			for _, item := range palette.list.VisibleItems() {
+				visible = append(visible, item.FilterValue())
+			}
+			t.Errorf("search %q rendered %q, want %q with shortcut %q; filter state=%s enabled=%t value=%q visible=%q",
+				test.query, view, test.wantName, test.wantKey, palette.list.FilterState(), palette.list.FilteringEnabled(), palette.list.FilterValue(), visible)
+		}
 	}
 }

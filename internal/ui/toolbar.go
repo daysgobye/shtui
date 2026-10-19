@@ -38,26 +38,46 @@ func (model *AppModel) toolbarView() string {
 		return ""
 	}
 	var output strings.Builder
-	style := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6))
 	for index, item := range toolbarItems {
 		if index > 0 {
-			output.WriteByte(' ')
+			if toolbarGroupBoundary(index) {
+				output.WriteString(lipgloss.NewStyle().Foreground(ANSIColor(8)).Render("  │  "))
+			} else {
+				output.WriteString("  ")
+			}
 		}
-		output.WriteString(style.Render(item.Label))
+		output.WriteString(toolbarItemStyle().Render(item.Label))
 	}
 	return output.String()
+}
+
+func toolbarItemStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6)).Padding(0, 1)
+}
+
+func toolbarGroupBoundary(index int) bool {
+	switch index {
+	case 3, 5, 7, 9, 11:
+		return true
+	default:
+		return false
+	}
 }
 
 func toolbarActionAt(x int) string {
 	position := 0
 	for index, item := range toolbarItems {
-		width := lipgloss.Width(item.Label)
+		width := lipgloss.Width(toolbarItemStyle().Render(item.Label))
 		if x >= position && x < position+width {
 			return item.ID
 		}
 		position += width
 		if index < len(toolbarItems)-1 {
-			position++
+			if toolbarGroupBoundary(index + 1) {
+				position += lipgloss.Width("  │  ")
+			} else {
+				position += 2
+			}
 		}
 	}
 	return ""

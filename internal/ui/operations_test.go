@@ -91,17 +91,17 @@ func TestMergeConfirmationAndConditionalFormattingCommands(t *testing.T) {
 }
 
 func TestPaletteIncludesCoreWorkbookOperations(t *testing.T) {
-	palette := CommandPalette{Open: true}
-	for _, command := range []string{"sort", "filter", "border", "merge", "unmerge", "conditional-format", "toggle-bold", "add-sheet", "open-file", "save-as"} {
+	palette := NewCommandPalette(DefaultKeyMap())
+	for _, expected := range []string{"sort", "filter", "border", "merge", "unmerge", "conditional-format", "toggle-bold", "add-sheet", "open-file", "save-as"} {
 		found := false
-		for _, item := range palette.Filtered() {
-			if item.ID == command {
+		for _, item := range palette.list.Items() {
+			if item, ok := item.(paletteItem); ok && item.command.ID == expected {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("command palette missing %q", command)
+			t.Errorf("command palette missing %q", expected)
 		}
 	}
 }

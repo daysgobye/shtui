@@ -1,101 +1,140 @@
 package ui
 
 import (
-	"strings"
-
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 type paletteCommand struct {
-	ID   string
-	Name string
+	ID          string
+	Name        string
+	Description string
+}
+
+type paletteItem struct {
+	command paletteCommand
+}
+
+func (item paletteItem) FilterValue() string {
+	return item.command.Name + " " + item.command.Description + " " + item.command.ID
+}
+func (item paletteItem) Title() string {
+	return item.command.Name
+}
+
+func (item paletteItem) Description() string {
+	return item.command.Description
+}
+
+func newPaletteItems(keys KeyMap) []list.Item {
+	commands := []paletteCommand{
+		{ID: "toggle-toolbar", Name: "Toggle toolbar"},
+		{ID: "hide-toolbar", Name: "Hide toolbar"},
+		{ID: "show-toolbar", Name: "Show toolbar"},
+		{ID: "undo", Name: "Undo"},
+		{ID: "redo", Name: "Redo"},
+		{ID: "find", Name: "Find"},
+		{ID: "fill-color", Name: "Fill color"},
+		{ID: "font-color", Name: "Font color"},
+		{ID: "insert-row", Name: "Insert row"},
+		{ID: "insert-column", Name: "Insert column"},
+		{ID: "open-file", Name: "Open file"},
+		{ID: "new-csv", Name: "New CSV workbook"},
+		{ID: "new-xlsx", Name: "New XLSX workbook"},
+		{ID: "save", Name: "Save"},
+		{ID: "save-as", Name: "Save as"},
+		{ID: "sort", Name: "Sort by selected column"},
+		{ID: "filter", Name: "Filter selected column"},
+		{ID: "border", Name: "Apply bottom border"},
+		{ID: "merge", Name: "Merge selected cells"},
+		{ID: "unmerge", Name: "Unmerge selected cells"},
+		{ID: "toggle-bold", Name: "Toggle bold"},
+		{ID: "add-sheet", Name: "Add sheet"},
+		{ID: "conditional-format", Name: "Add conditional formatting"},
+		{ID: "previous-sheet", Name: "Previous sheet"},
+		{ID: "next-sheet", Name: "Next sheet"},
+	}
+	items := make([]list.Item, 0, len(commands))
+	for _, command := range commands {
+		shortcut := keys.Shortcut(command.ID)
+		if shortcut != "" {
+			command.Description = "Keyboard shortcut · " + shortcut
+		}
+		items = append(items, paletteItem{command: command})
+	}
+	return items
 }
 
 type CommandPalette struct {
 	Open     bool
 	Query    string
 	Selected int
+	list     list.Model
+	help     help.Model
+	keys     KeyMap
 }
 
-var paletteCommands = []paletteCommand{
-	{ID: "toggle-toolbar", Name: "Toggle toolbar"},
-	{ID: "hide-toolbar", Name: "Hide toolbar"},
-	{ID: "show-toolbar", Name: "Show toolbar"},
-	{ID: "undo", Name: "Undo"},
-	{ID: "redo", Name: "Redo"},
-	{ID: "find", Name: "Find"},
-	{ID: "fill-color", Name: "Fill color"},
-	{ID: "font-color", Name: "Font color"},
-	{ID: "insert-row", Name: "Insert row"},
-	{ID: "insert-column", Name: "Insert column"},
-	{ID: "open-file", Name: "Open file"},
-	{ID: "new-csv", Name: "New CSV workbook"},
-	{ID: "new-xlsx", Name: "New XLSX workbook"},
-	{ID: "save", Name: "Save"},
-	{ID: "save-as", Name: "Save as"},
-	{ID: "sort", Name: "Sort by selected column"},
-	{ID: "filter", Name: "Filter selected column"},
-	{ID: "border", Name: "Apply bottom border"},
-	{ID: "merge", Name: "Merge selected cells"},
-	{ID: "unmerge", Name: "Unmerge selected cells"},
-	{ID: "toggle-bold", Name: "Toggle bold"},
-	{ID: "add-sheet", Name: "Add sheet"},
-	{ID: "conditional-format", Name: "Add conditional formatting"},
+func NewCommandPalette(keys KeyMap) CommandPalette {
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = true
+	delegate.SetSpacing(0)
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(ANSIColor(6)).Bold(true)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(ANSIColor(7))
+	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(ANSIColor(7))
+	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(ANSIColor(8))
+	items := newPaletteItems(keys)
+	commands := list.New(items, delegate, 54, 12)
+	commands.Title = "Commands · keyboard shortcuts"
+	commands.SetShowStatusBar(false)
+	commands.SetShowPagination(false)
+	commands.SetShowHelp(false)
+	commands.SetShowTitle(true)
+	commands.SetShowFilter(true)
+	commands.Styles.Title = lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6))
+	commands.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(ANSIColor(6))
+	commands.Styles.FilterCursor = lipgloss.NewStyle().Foreground(ANSIColor(6))
+	return CommandPalette{list: commands, help: help.New(), keys: keys}
 }
 
 func (palette *CommandPalette) Show() {
+	if palette == nil {
+		return
+	}
 	palette.Open = true
 	palette.Query = ""
 	palette.Selected = 0
-}
-
-func (palette *CommandPalette) Filtered() []paletteCommand {
-	if palette == nil {
-		return nil
-	}
-	needle := strings.ToLower(strings.TrimSpace(palette.Query))
-	matches := make([]paletteCommand, 0, len(paletteCommands))
-	for _, command := range paletteCommands {
-		if needle == "" || strings.Contains(strings.ToLower(command.Name), needle) {
-			matches = append(matches, command)
-		}
-	}
-	return matches
+	palette.list.ResetFilter()
+	palette.list.SetFilterState(list.Filtering)
+	palette.list.Select(0)
 }
 
 func (palette *CommandPalette) HandleKey(message tea.KeyMsg) (string, bool) {
 	if palette == nil || !palette.Open {
 		return "", false
 	}
-	matches := palette.Filtered()
-	switch message.Type {
-	case tea.KeyEsc:
+	if message.Type == tea.KeyEsc {
 		palette.Open = false
-	case tea.KeyEnter:
-		if len(matches) == 0 {
-			return "", false
+		return "", false
+	}
+	var commandID string
+	if message.Type == tea.KeyEnter {
+		if item, ok := palette.list.SelectedItem().(paletteItem); ok {
+			commandID = item.command.ID
 		}
-		palette.Selected = min(max(palette.Selected, 0), len(matches)-1)
+	}
+	previousQuery := palette.list.FilterValue()
+	palette.list, _ = palette.list.Update(message)
+	palette.Query = palette.list.FilterValue()
+	palette.Selected = palette.list.Index()
+	if palette.Query != previousQuery {
+		palette.list.SetFilterText(palette.Query)
+		palette.list.SetFilterState(list.Filtering)
+	}
+	if commandID != "" {
 		palette.Open = false
-		return matches[palette.Selected].ID, true
-	case tea.KeyUp:
-		if len(matches) > 0 {
-			palette.Selected = max(0, palette.Selected-1)
-		}
-	case tea.KeyDown:
-		if len(matches) > 0 {
-			palette.Selected = min(len(matches)-1, palette.Selected+1)
-		}
-	case tea.KeyBackspace:
-		runes := []rune(palette.Query)
-		if len(runes) > 0 {
-			palette.Query = string(runes[:len(runes)-1])
-		}
-		palette.Selected = 0
-	case tea.KeyRunes:
-		palette.Query += string(message.Runes)
-		palette.Selected = 0
+		return commandID, true
 	}
 	return "", false
 }
@@ -104,19 +143,16 @@ func (palette *CommandPalette) View(width int) string {
 	if palette == nil || !palette.Open {
 		return ""
 	}
-	matches := palette.Filtered()
-	var output strings.Builder
-	output.WriteString("⌕  " + palette.Query + "_\n")
-	for index, command := range matches {
-		prefix := "  "
-		if index == palette.Selected {
-			prefix = "> "
-		}
-		output.WriteString(prefix + command.Name + "\n")
-	}
-	if len(matches) == 0 {
-		output.WriteString("  No matching commands\n")
-	}
-	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ANSIColor(8)).Width(max(width-4, 1))
-	return style.Render(strings.TrimSuffix(output.String(), "\n"))
+	frameWidth := min(64, max(width-4, 1))
+	innerWidth := max(frameWidth-4, 1)
+	frameHeight := min(14, max(5, width/3))
+	palette.list.SetSize(innerWidth, max(frameHeight-4, 1))
+	palette.help.Width = innerWidth
+	content := lipgloss.JoinVertical(lipgloss.Left, palette.list.View(), palette.help.View(palette.keys))
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ANSIColor(6)).
+		Padding(0, 1).
+		Width(innerWidth).
+		Render(content)
 }
