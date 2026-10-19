@@ -136,9 +136,52 @@ func validateConditionalRule(rule ConditionalRule) error {
 
 // EffectiveStyle combines direct formatting with matching conditional formatting.
 func EffectiveStyle(sheet *Sheet, address Coord) CellStyle {
+	return NewEffectiveStyleResolver(sheet).StyleAt(address)
+}
+
+// EffectiveStyleResolver prepares range-wide conditional data once for repeated style lookups.
+type EffectiveStyleResolver struct {
+	sheet       *Sheet
+	scaleBounds []colorScaleBounds
+}
+
+type colorScaleBounds struct {
+	minimum float64
+	median  float64
+	maximum float64
+	valid   bool
+}
+
+func NewEffectiveStyleResolver(sheet *Sheet) *EffectiveStyleResolver {
+	resolver := &EffectiveStyleResolver{sheet: sheet}
 	if sheet == nil {
+		return resolver
+	}
+	hasColorScale := false
+	for _, rule := range sheet.ConditionalRules {
+		if rule.ColorScale != nil {
+			hasColorScale = true
+			break
+		}
+	}
+	if !hasColorScale {
+		return resolver
+	}
+	resolver.scaleBounds = make([]colorScaleBounds, len(sheet.ConditionalRules))
+	for index, rule := range sheet.ConditionalRules {
+		if rule.ColorScale != nil {
+			resolver.scaleBounds[index] = calculateColorScaleBounds(sheet, rule)
+		}
+	}
+	return resolver
+}
+
+// StyleAt combines direct formatting with matching conditional formatting.
+func (resolver *EffectiveStyleResolver) StyleAt(address Coord) CellStyle {
+	if resolver == nil || resolver.sheet == nil {
 		return CellStyle{}
 	}
+	sheet := resolver.sheet
 	cell := sheet.Cells[address]
 	style := cell.Style
 	value := cell.Input
@@ -148,13 +191,15 @@ func EffectiveStyle(sheet *Sheet, address Coord) CellStyle {
 		}
 		value = cell.Result
 	}
-	for _, rule := range sheet.ConditionalRules {
+	for index, rule := range sheet.ConditionalRules {
 		if !rangeContains(rule.Range, address) {
 			continue
 		}
 		if rule.ColorScale != nil {
-			if fill, ok := colorScaleFill(sheet, rule, value); ok {
-				style.FillRGB = fill
+			if index < len(resolver.scaleBounds) {
+				if fill, ok := colorScaleFill(rule.ColorScale, value, resolver.scaleBounds[index]); ok {
+					style.FillRGB = fill
+				}
 			}
 			continue
 		}
@@ -171,41 +216,44 @@ func EffectiveStyle(sheet *Sheet, address Coord) CellStyle {
 	return style
 }
 
-func colorScaleFill(sheet *Sheet, rule ConditionalRule, value string) (string, bool) {
-	scale := rule.ColorScale
-	if scale == nil {
+func calculateColorScaleBounds(sheet *Sheet, rule ConditionalRule) colorScaleBounds {
+	values := make([]float64, 0)
+	for row := rule.Range.Start.Row; row <= rule.Range.End.Row; row++ {
+		for col := rule.Range.Start.Col; col <= rule.Range.End.Col; col++ {
+			cell := sheet.Cells[Coord{Row: row, Col: col}]
+			value := cell.Input
+			if strings.HasPrefix(value, "=") {
+				if cell.CalculationState != Current {
+					continue
+				}
+				value = cell.Result
+			}
+			number, err := strconv.ParseFloat(value, 64)
+			if err == nil {
+				values = append(values, number)
+			}
+		}
+	}
+	if len(values) == 0 {
+		return colorScaleBounds{}
+	}
+	sort.Float64s(values)
+	median := values[len(values)/2]
+	if len(values)%2 == 0 {
+		median = (values[len(values)/2-1] + median) / 2
+	}
+	return colorScaleBounds{minimum: values[0], median: median, maximum: values[len(values)-1], valid: true}
+}
+
+func colorScaleFill(scale *ColorScale, value string, bounds colorScaleBounds) (string, bool) {
+	if scale == nil || !bounds.valid {
 		return "", false
 	}
 	current, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return "", false
 	}
-	values := make([]float64, 0)
-	for row := rule.Range.Start.Row; row <= rule.Range.End.Row; row++ {
-		for col := rule.Range.Start.Col; col <= rule.Range.End.Col; col++ {
-			cell := sheet.Cells[Coord{Row: row, Col: col}]
-			cellValue := cell.Input
-			if strings.HasPrefix(cellValue, "=") {
-				if cell.CalculationState != Current {
-					continue
-				}
-				cellValue = cell.Result
-			}
-			number, parseErr := strconv.ParseFloat(cellValue, 64)
-			if parseErr == nil {
-				values = append(values, number)
-			}
-		}
-	}
-	if len(values) == 0 {
-		return "", false
-	}
-	sort.Float64s(values)
-	minimum, maximum := values[0], values[len(values)-1]
-	median := values[len(values)/2]
-	if len(values)%2 == 0 {
-		median = (values[len(values)/2-1] + median) / 2
-	}
+	minimum, median, maximum := bounds.minimum, bounds.median, bounds.maximum
 	if minimum == maximum {
 		if scale.MidRGB != "" {
 			return normalizeStoredColor(scale.MidRGB), true

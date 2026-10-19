@@ -228,6 +228,20 @@ func TestConditionalDialogSupportsTwoAndThreeColorScales(t *testing.T) {
 	}
 }
 
+func TestConditionalDialogDoesNotDuplicateAddedColorScaleDraft(t *testing.T) {
+	dialog := newConditionalDialog("A1:A2")
+	dialog.Mode = conditionalColorScale
+	dialog.addRule()
+
+	_, rules, err := dialog.BuildRules()
+	if err != nil {
+		t.Fatalf("BuildRules: %v", err)
+	}
+	if len(rules) != 1 || rules[0].ColorScale == nil {
+		t.Fatalf("BuildRules returned %d rules after adding one scale draft: %#v", len(rules), rules)
+	}
+}
+
 func TestConditionalDialogAcceptsCustomRGBColor(t *testing.T) {
 	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
 	model.runCommand("conditional-format")

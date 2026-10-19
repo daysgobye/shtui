@@ -18,7 +18,7 @@ With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook
 - Drag with the left mouse button to select a rectangular range. Drag a column-header boundary to resize that column; column labels stay visible when the toolbar is hidden. The mouse wheel scrolls.
 - Click a sheet tab or use Ctrl+PageUp / Ctrl+PageDown to switch sheets. **Add sheet** creates a sheet and activates it. **Insert row** and **Insert column** insert before the selected cell.
 - Ctrl+Z / Ctrl+Y undo and redo. **Find** searches the active sheet for a case-insensitive substring.
-- The formula bar shows the selected cell's source input. Enter formulas directly with `=`, for example `=SUM(A1:A5)`. Select ranges with the mouse, or use **Insert function** to open the supported-function picker and edit its range and result cell.
+- The formula bar shows the selected cell's source input. Enter formulas directly with `=`, for example `=SUM(A1:A5)`. Select ranges with the mouse, or use **Insert function** to open the supported-function picker and set its range and result cell. For `IF`, enter all three comma-separated arguments, for example `A1>0,"yes","no"`; the picker builds `=IF(A1>0,"yes","no")`.
 
 The initial formula scope is arithmetic, cell references/ranges, and common functions `SUM`, `AVERAGE`, `COUNT`, `MIN`, `MAX`, and `IF`. Excelize performs calculation; formulas it cannot recalculate are retained as source and marked stale or unsupported rather than presenting an old cached result as current. This is not full Excel formula compatibility.
 

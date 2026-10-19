@@ -130,6 +130,32 @@ func TestFunctionPickerPrefillsSelectedRange(t *testing.T) {
 	}
 }
 
+func TestFunctionPickerAcceptsAllThreeIFArguments(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	if err := workbook.SetCell(model.session, workbook.CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}, "1"); err != nil {
+		t.Fatal(err)
+	}
+	model.runCommand("insert-function")
+	for range 5 {
+		model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if got := model.FunctionPicker.Syntax(); got != "IF(condition, true value, false value)" {
+		t.Fatalf("selected function syntax = %q, want IF", got)
+	}
+	if model.FunctionPicker.RangeInput.Value() != "" || model.FunctionPicker.RangeInput.Prompt != "Arguments: " {
+		t.Fatalf("IF picker retained range prompt/value: prompt=%q value=%q", model.FunctionPicker.RangeInput.Prompt, model.FunctionPicker.RangeInput.Value())
+	}
+	model.FunctionPicker.RangeInput.SetValue(`A1>0,"yes","no"`)
+	model.FunctionPicker.TargetInput.SetValue("B1")
+	model.FunctionPicker.Focus = 2
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	result := model.session.Workbook.Sheets[0].Cells[workbook.Coord{Col: 1}]
+	if result.Input != `=IF(A1>0,"yes","no")` || result.Result != "yes" {
+		t.Fatalf("IF result = (%q, %q), want (=IF(A1>0,\"yes\",\"no\"), yes)", result.Input, result.Result)
+	}
+}
+
 func newInteractionModel(t *testing.T, sheetCount int) AppModel {
 	t.Helper()
 	session, err := workbook.NewWorkbook(workbook.CSV)

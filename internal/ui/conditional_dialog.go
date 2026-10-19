@@ -17,19 +17,20 @@ const (
 )
 
 type conditionalDialogState struct {
-	Open       bool
-	RangeInput textinput.Model
-	ValueInput textinput.Model
-	Mode       int
-	Focus      int
-	Operator   int
-	FillRGB    string
-	FontRGB    string
-	Scale      workbook.ColorScale
-	ThreeColor bool
-	Rules      []workbook.ConditionalRule
-	ColorField string
-	Error      string
+	Open             bool
+	RangeInput       textinput.Model
+	ValueInput       textinput.Model
+	Mode             int
+	Focus            int
+	Operator         int
+	FillRGB          string
+	FontRGB          string
+	Scale            workbook.ColorScale
+	ThreeColor       bool
+	ScaleDraftActive bool
+	Rules            []workbook.ConditionalRule
+	ColorField       string
+	Error            string
 }
 
 var conditionalOperators = []struct {
@@ -61,11 +62,12 @@ func newConditionalDialog(rangeName string) conditionalDialogState {
 	valueInput.TextStyle = rangeInput.TextStyle
 	valueInput.Cursor.Style = rangeInput.Cursor.Style
 	return conditionalDialogState{
-		Open:       true,
-		RangeInput: rangeInput,
-		ValueInput: valueInput,
-		Scale:      workbook.ColorScale{MinRGB: "CD0000", MidRGB: "FFFF00", MaxRGB: "00CD00"},
-		ThreeColor: true,
+		Open:             true,
+		RangeInput:       rangeInput,
+		ValueInput:       valueInput,
+		Scale:            workbook.ColorScale{MinRGB: "CD0000", MidRGB: "FFFF00", MaxRGB: "00CD00"},
+		ThreeColor:       true,
+		ScaleDraftActive: true,
 	}
 }
 
@@ -212,6 +214,9 @@ func (dialog *conditionalDialogState) addRule() string {
 		return ""
 	}
 	dialog.Rules = append(dialog.Rules, rules[0])
+	if dialog.Mode == conditionalColorScale {
+		dialog.ScaleDraftActive = false
+	}
 	dialog.ValueInput.Reset()
 	dialog.FillRGB = ""
 	dialog.FontRGB = ""
@@ -244,6 +249,9 @@ func (dialog *conditionalDialogState) BuildRules() (workbook.CellRange, []workbo
 
 func (dialog *conditionalDialogState) currentRules() ([]workbook.ConditionalRule, error) {
 	if dialog.Mode == conditionalColorScale {
+		if !dialog.ScaleDraftActive {
+			return nil, nil
+		}
 		scale := dialog.Scale
 		if !dialog.ThreeColor {
 			scale.MidRGB = ""
@@ -289,10 +297,13 @@ func (dialog *conditionalDialogState) SetColor(rgb string) {
 		dialog.FontRGB = rgb
 	case "min":
 		dialog.Scale.MinRGB = rgb
+		dialog.ScaleDraftActive = true
 	case "mid":
 		dialog.Scale.MidRGB = rgb
+		dialog.ScaleDraftActive = true
 	case "max":
 		dialog.Scale.MaxRGB = rgb
+		dialog.ScaleDraftActive = true
 	}
 	dialog.Error = ""
 }

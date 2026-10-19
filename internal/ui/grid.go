@@ -166,6 +166,7 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 	if grid == nil || sheet == nil || height <= 0 {
 		return ""
 	}
+	styleResolver := workbook.NewEffectiveStyleResolver(sheet)
 	var output strings.Builder
 	columnHeader := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6))
 	rowHeader := lipgloss.NewStyle().Foreground(ANSIColor(8))
@@ -212,7 +213,7 @@ func (grid *GridViewport) View(sheet *workbook.Sheet, height int) string {
 					value = cell.Result
 				}
 				style := lipgloss.NewStyle().Bold(cell.Style.Bold)
-				effective := workbook.EffectiveStyle(sheet, cellCoord)
+				effective := styleResolver.StyleAt(cellCoord)
 				if effective.FontRGB != "" {
 					if color, err := ParseRGBHex("#" + effective.FontRGB); err == nil {
 						style = style.Foreground(TerminalColor(color, supportsTrueColor()))

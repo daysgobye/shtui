@@ -179,6 +179,26 @@ func TestThreeColorScaleInterpolatesNumericValues(t *testing.T) {
 	}
 }
 
+func TestEffectiveStyleResolverAppliesColorScaleAcrossCells(t *testing.T) {
+	session := newOperationSession(t)
+	setCellInputs(t, session, map[Coord]string{{Row: 0}: "0", {Row: 1}: "50", {Row: 2}: "100"})
+	selection := CellRange{Start: Coord{Row: 0}, End: Coord{Row: 2}}
+	scale := ColorScale{MinRGB: "FF0000", MidRGB: "FFFF00", MaxRGB: "00FF00"}
+	if err := AddColorScaleRule(session, "Sheet1", selection, scale); err != nil {
+		t.Fatalf("AddColorScaleRule: %v", err)
+	}
+
+	resolver := NewEffectiveStyleResolver(&session.Workbook.Sheets[0])
+	for _, test := range []struct {
+		row  int
+		want string
+	}{{0, "FF0000"}, {1, "FFFF00"}, {2, "00FF00"}} {
+		if got := resolver.StyleAt(Coord{Row: test.row}).FillRGB; got != test.want {
+			t.Errorf("row %d color = %q, want %q", test.row, got, test.want)
+		}
+	}
+}
+
 func TestColorScaleHandlesSingleCellAndNonnumericValues(t *testing.T) {
 	session := newOperationSession(t)
 	setCellInputs(t, session, map[Coord]string{{Row: 0}: "7", {Row: 1}: "text"})

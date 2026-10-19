@@ -101,13 +101,33 @@ func (picker *formulaPickerState) HandleKey(message tea.KeyMsg) (submitted, canc
 	}
 	switch picker.Focus {
 	case 0:
+		previous := picker.selectedFunctionName()
 		picker.Functions, _ = picker.Functions.Update(message)
+		current := picker.selectedFunctionName()
+		if current != previous {
+			if current == "IF" {
+				picker.RangeInput.SetValue("")
+			}
+			if current == "IF" {
+				picker.RangeInput.Prompt = "Arguments: "
+			} else {
+				picker.RangeInput.Prompt = "Range: "
+			}
+		}
 	case 1:
 		picker.RangeInput, _ = picker.RangeInput.Update(message)
 	case 2:
 		picker.TargetInput, _ = picker.TargetInput.Update(message)
 	}
 	return false, false
+}
+
+func (picker *formulaPickerState) selectedFunctionName() string {
+	item, ok := picker.Functions.SelectedItem().(functionItem)
+	if !ok {
+		return ""
+	}
+	return item.definition.name
 }
 
 func (picker *formulaPickerState) focusNext() {
@@ -138,7 +158,7 @@ func (picker *formulaPickerState) Formula() (string, error) {
 		}
 		return "=" + item.definition.name + "(" + argument + ")", nil
 	case "IF":
-		return "=IF(" + argument + ",TRUE,FALSE)", nil
+		return "=IF(" + argument + ")", nil
 	default:
 		return "", fmt.Errorf("unsupported function %q", item.definition.name)
 	}
