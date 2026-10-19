@@ -113,6 +113,7 @@ func (screen *homeScreen) layout(width, height int) homeScreenLayout {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ANSIColor(8)).
 		Padding(0, 1).
+		Width(listWidth).
 		Render(listView)
 	wordmark := lipgloss.NewStyle().Foreground(ANSIColor(6)).Bold(true).Render("shtui")
 	tagline := lipgloss.NewStyle().Foreground(ANSIColor(8)).Render("A calmer way to work with spreadsheets")

@@ -48,6 +48,26 @@ func TestWelcomeScreenMouseSelectsWorkbookAction(t *testing.T) {
 	}
 }
 
+func TestWelcomeScreenMouseIgnoresOutsidePanel(t *testing.T) {
+	model := NewModel(nil)
+	view := model.View()
+	_, y := renderedActionPoint(t, view, "New CSV")
+	panelLeft := -1
+	for _, line := range strings.Split(ansi.Strip(view), "\n") {
+		if left := strings.Index(line, "╭"); left >= 0 {
+			panelLeft = left
+			break
+		}
+	}
+	if panelLeft <= 0 {
+		t.Fatalf("welcome panel is not inset from the terminal edge: %q", ansi.Strip(view))
+	}
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: panelLeft - 1, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if action := model.TakeCommand(); action != "" {
+		t.Fatalf("click outside the visible panel emitted %q", action)
+	}
+}
+
 func TestWelcomeScreenKeyboardChoosesSelectedAction(t *testing.T) {
 	model := NewModel(nil)
 	model.Update(tea.KeyMsg{Type: tea.KeyDown})
