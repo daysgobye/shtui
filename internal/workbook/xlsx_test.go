@@ -177,3 +177,154 @@ func TestOpenXLSXRecalculatesSupportedFormula(t *testing.T) {
 		t.Fatalf("reopened formula = (%q, %q), want (3, current)", cell.Result, cell.CalculationState)
 	}
 }
+
+func TestSaveFileConvertsCSVSessionToXLSX(t *testing.T) {
+	session := newCSVSessionWithSupportedFeatures(t)
+	path := filepath.Join(t.TempDir(), "converted.xlsx")
+	if err := SaveFile(session, path); err != nil {
+		t.Fatalf("SaveFile CSV as XLSX: %v", err)
+	}
+	if session.Format != XLSX || session.Workbook.Format != XLSX {
+		t.Fatalf("formats after conversion = session %s, workbook %s; want xlsx", session.Format, session.Workbook.Format)
+	}
+	if session.Path != path || session.Workbook.Path != path || session.Workbook.Dirty {
+		t.Fatalf("session after conversion: path=%q workbookPath=%q dirty=%t", session.Path, session.Workbook.Path, session.Workbook.Dirty)
+	}
+
+	reopened, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile converted workbook: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := len(reopened.Workbook.Sheets); got != 2 {
+		t.Fatalf("reopened sheet count = %d, want 2", got)
+	}
+	formula := reopened.Workbook.Sheets[0].Cells[Coord{Row: 2}]
+	if formula.Input != "=SUM(A1:A2)" || formula.Result != "5" || formula.CalculationState != Current {
+		t.Fatalf("reopened formula = (%q, %q, %q)", formula.Input, formula.Result, formula.CalculationState)
+	}
+	style := reopened.Workbook.Sheets[0].Cells[Coord{}].Style
+	if style.FillRGB != "123456" || style.FontRGB != "ABCDEF" || style.Borders.Top.Preset != "thick" {
+		t.Fatalf("reopened direct style = %#v", style)
+	}
+	width, err := reopened.file.GetColWidth("Sheet1", "B")
+	if err != nil {
+		t.Fatalf("GetColWidth after reopen: %v", err)
+	}
+	if width != 22 {
+		t.Fatalf("reopened XLSX column B width = %v, want 22", width)
+	}
+	if got := reopened.Workbook.Sheets[0].Merges; len(got) != 1 || got[0] != (CellRange{Start: Coord{Row: 3}, End: Coord{Row: 3, Col: 1}}) {
+		t.Fatalf("reopened merges = %#v", got)
+	}
+	if err := LoadColorScales(reopened); err != nil {
+		t.Fatalf("LoadColorScales: %v", err)
+	}
+	rules := reopened.Workbook.Sheets[0].ConditionalRules
+	if len(rules) != 2 || rules[0].Operator != GreaterThan || rules[1].ColorScale == nil {
+		t.Fatalf("reopened conditional rules = %#v", rules)
+	}
+	if got := reopened.Workbook.Sheets[1].Cells[Coord{}].Input; got != "second sheet" {
+		t.Fatalf("reopened second sheet A1 = %q, want %q", got, "second sheet")
+	}
+}
+
+func TestSaveFileConversionInitializesUntouchedCSVSession(t *testing.T) {
+	session, err := NewWorkbook(CSV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	session.Workbook.Sheets[0].Cells[Coord{}] = Cell{Input: "untouched", Result: "untouched", CalculationState: Literal}
+	session.Workbook.Sheets[0].Rows = 1
+	session.Workbook.Sheets[0].Cols = 1
+	session.Workbook.Dirty = true
+	if session.file != nil {
+		t.Fatal("new CSV session unexpectedly has an Excelize package")
+	}
+
+	path := filepath.Join(t.TempDir(), "initialized.xlsx")
+	if err := SaveFile(session, path); err != nil {
+		t.Fatalf("SaveFile untouched CSV session: %v", err)
+	}
+	reopened, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile converted workbook: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := reopened.Workbook.Sheets[0].Cells[Coord{}].Input; got != "untouched" {
+		t.Fatalf("reopened A1 = %q, want untouched", got)
+	}
+}
+
+func TestSaveFileConversionFailureLeavesCSVSessionUnchanged(t *testing.T) {
+	session, err := NewWorkbook(CSV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	session.Path = "original.csv"
+	session.Workbook.Path = session.Path
+	session.Workbook.Sheets[0].Cells[Coord{}] = Cell{Input: "keep", Result: "keep", CalculationState: Literal}
+	session.Workbook.Sheets[0].Rows = 1
+	session.Workbook.Sheets[0].Cols = 1
+	session.Workbook.Dirty = true
+	destination := filepath.Join(t.TempDir(), "missing", "converted.xlsx")
+	if err := SaveFile(session, destination); err == nil {
+		t.Fatal("SaveFile to a missing parent succeeded")
+	}
+	if session.Format != CSV || session.Workbook.Format != CSV {
+		t.Fatalf("failed conversion formats = session %s, workbook %s; want csv", session.Format, session.Workbook.Format)
+	}
+	if session.Path != "original.csv" || session.Workbook.Path != "original.csv" || !session.Workbook.Dirty {
+		t.Fatalf("failed conversion changed session metadata: path=%q workbookPath=%q dirty=%t", session.Path, session.Workbook.Path, session.Workbook.Dirty)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{}].Input; got != "keep" {
+		t.Fatalf("failed conversion changed A1 to %q", got)
+	}
+}
+
+func newCSVSessionWithSupportedFeatures(t *testing.T) *Session {
+	t.Helper()
+	session, err := NewWorkbook(CSV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	for row, value := range []string{"2", "3", "=SUM(A1:A2)"} {
+		if err := SetCell(session, CellAddress{Sheet: "Sheet1", Row: row, Col: 0}, value); err != nil {
+			t.Fatalf("SetCell row %d: %v", row, err)
+		}
+	}
+	if err := AddSheet(session, "Data"); err != nil {
+		t.Fatalf("AddSheet: %v", err)
+	}
+	if err := SetCell(session, CellAddress{Sheet: "Data", Row: 0, Col: 0}, "second sheet"); err != nil {
+		t.Fatalf("SetCell second sheet: %v", err)
+	}
+	if err := SetColumnWidth(session, "Sheet1", 1, 22); err != nil {
+		t.Fatalf("SetColumnWidth: %v", err)
+	}
+	style := CellStyle{
+		FillRGB: "123456",
+		FontRGB: "ABCDEF",
+		Borders: BorderSet{Top: BorderStyle{Preset: "thick", ColorRGB: "FF0000"}},
+	}
+	if err := ApplyStyle(session, "Sheet1", CellRange{}, style); err != nil {
+		t.Fatalf("ApplyStyle: %v", err)
+	}
+	if _, err := MergeRange(session, "Sheet1", CellRange{Start: Coord{Row: 3}, End: Coord{Row: 3, Col: 1}}, false); err != nil {
+		t.Fatalf("MergeRange: %v", err)
+	}
+	if err := AddConditionalRule(session, "Sheet1", CellRange{Start: Coord{}, End: Coord{Row: 1}}, ConditionalRule{
+		Operator: GreaterThan, Value: "0", FillRGB: "00FF00",
+	}); err != nil {
+		t.Fatalf("AddConditionalRule: %v", err)
+	}
+	if err := AddColorScaleRule(session, "Sheet1", CellRange{Start: Coord{Col: 1}, End: Coord{Row: 1, Col: 1}}, ColorScale{
+		MinRGB: "FF0000", MidRGB: "FFFF00", MaxRGB: "00FF00",
+	}); err != nil {
+		t.Fatalf("AddColorScaleRule: %v", err)
+	}
+	return session
+}

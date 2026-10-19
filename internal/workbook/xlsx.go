@@ -177,13 +177,18 @@ func SaveFile(session *Session, path string) error {
 	if err != nil {
 		return err
 	}
-	if format != session.Format {
+	conversion := session.Format == CSV && format == XLSX
+	if format != session.Format && !conversion {
 		return fmt.Errorf("save %q as %s would change workbook format from %s", path, format, session.Format)
 	}
 	if format == CSV {
 		return saveCSV(session, path)
 	}
-	if session.file == nil {
+	if conversion {
+		if err := ensureCalculationFile(session); err != nil {
+			return fmt.Errorf("prepare XLSX conversion for %q: %w", path, err)
+		}
+	} else if session.file == nil {
 		return fmt.Errorf("save %q: XLSX session has no open workbook", path)
 	}
 
@@ -195,7 +200,7 @@ func SaveFile(session *Session, path string) error {
 	if err := session.file.SaveAs(tempPath); err != nil {
 		return fmt.Errorf("save temporary workbook for %q: %w", path, err)
 	}
-	if session.Path != "" && len(session.OriginalParts) > 0 {
+	if !conversion && session.Path != "" && len(session.OriginalParts) > 0 {
 		if err := AuditPackage(session.Path, tempPath, safeWorkbookChanges(session.OriginalParts)); err != nil {
 			return fmt.Errorf("refusing save of %q to preserve workbook content: %w", path, err)
 		}
@@ -210,6 +215,8 @@ func SaveFile(session *Session, path string) error {
 	if err := os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("replace workbook %q: %w", path, err)
 	}
+	session.Format = format
+	session.Workbook.Format = format
 	session.Path = path
 	session.Workbook.Path = path
 	session.OriginalParts = parts
