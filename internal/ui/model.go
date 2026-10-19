@@ -364,7 +364,10 @@ func (model *AppModel) handleColorKey(message tea.KeyMsg) {
 	}
 }
 func (model *AppModel) handleConditionalDialogKey(message tea.KeyMsg) {
-	action := model.ConditionalDialog.HandleKey(message)
+	model.handleConditionalDialogAction(model.ConditionalDialog.HandleKey(message))
+}
+
+func (model *AppModel) handleConditionalDialogAction(action string) {
 	switch action {
 	case "color":
 		model.openColorPicker(conditionalDialogColorTarget)
@@ -409,7 +412,12 @@ func (model *AppModel) handleMouse(message tea.MouseMsg) {
 		model.handleColorPickerMouse(message)
 		return
 	}
-	if model.Palette.Open || model.ConditionalDialog.Open {
+	if model.Palette.Open {
+		return
+	}
+	if model.ConditionalDialog.Open {
+		action := model.ConditionalDialog.HandleMouse(message, model.width, model.height)
+		model.handleConditionalDialogAction(action)
 		return
 	}
 	if model.toolbarVisible && event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == 0 {

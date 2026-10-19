@@ -17,20 +17,21 @@ const (
 )
 
 type conditionalDialogState struct {
-	Open             bool
-	RangeInput       textinput.Model
-	ValueInput       textinput.Model
-	Mode             int
-	Focus            int
-	Operator         int
-	FillRGB          string
-	FontRGB          string
-	Scale            workbook.ColorScale
-	ThreeColor       bool
-	ScaleDraftActive bool
-	Rules            []workbook.ConditionalRule
-	ColorField       string
-	Error            string
+	Open              bool
+	RangeInput        textinput.Model
+	ValueInput        textinput.Model
+	Mode              int
+	Focus             int
+	Operator          int
+	FillRGB           string
+	FontRGB           string
+	Scale             workbook.ColorScale
+	ThreeColor        bool
+	ScaleDraftActive  bool
+	Rules             []workbook.ConditionalRule
+	ColorField        string
+	ConditionMenuOpen bool
+	Error             string
 }
 
 var conditionalOperators = []struct {
@@ -81,21 +82,28 @@ func (dialog *conditionalDialogState) HandleKey(message tea.KeyMsg) string {
 		return "cancel"
 	case tea.KeyTab:
 		dialog.Focus = (dialog.Focus + 1) % dialog.focusCount()
+		dialog.ConditionMenuOpen = false
 		dialog.Error = ""
 		dialog.syncInputFocus()
 		return ""
 	case tea.KeyEnter:
+		if dialog.ConditionMenuOpen {
+			dialog.ConditionMenuOpen = false
+			return ""
+		}
 		action := dialog.enter()
 		dialog.syncInputFocus()
 		return action
 	case tea.KeyLeft:
 		if dialog.Focus == 1 {
 			dialog.Mode = conditionalSingleColor
+			dialog.ConditionMenuOpen = false
 			dialog.Error = ""
 		}
 	case tea.KeyRight:
 		if dialog.Focus == 1 {
 			dialog.Mode = conditionalColorScale
+			dialog.ConditionMenuOpen = false
 			dialog.Error = ""
 		}
 	case tea.KeyUp, tea.KeyDown:
@@ -222,6 +230,7 @@ func (dialog *conditionalDialogState) addRule() string {
 	dialog.FontRGB = ""
 	dialog.Operator = 0
 	dialog.Focus = 2
+	dialog.ConditionMenuOpen = false
 	dialog.Error = ""
 	return ""
 }
@@ -308,16 +317,48 @@ func (dialog *conditionalDialogState) SetColor(rgb string) {
 	dialog.Error = ""
 }
 
+type conditionalDialogLayout struct {
+	View     string
+	Bounds   overlayRect
+	Controls []conditionalDialogControl
+}
+
+type conditionalDialogControl struct {
+	XStart int
+	XEnd   int
+	Y      int
+	Action string
+	Value  int
+	ClickX int
+}
+
 func (dialog *conditionalDialogState) View(width, height int) string {
+	return dialog.layout(width, height).View
+}
+
+func (dialog *conditionalDialogState) inputView(input *textinput.Model) string {
+	value := []rune(input.Value())
+	if !input.Focused() {
+		return input.PromptStyle.Render(input.Prompt) + input.TextStyle.Render(string(value))
+	}
+	position := clamp(input.Position(), 0, len(value))
+	return input.PromptStyle.Render(input.Prompt) +
+		input.TextStyle.Render(string(value[:position])) +
+		input.Cursor.View() +
+		input.TextStyle.Render(string(value[position:]))
+}
+
+func (dialog *conditionalDialogState) layout(width, height int) conditionalDialogLayout {
+	width = max(width, 1)
+	height = max(height, 1)
 	frameWidth := min(76, max(width-4, 1))
 	innerWidth := max(frameWidth-4, 1)
 	compact := width <= 42 || height <= 12
-	if height <= 10 {
-		return dialog.tinyView(innerWidth)
-	}
-	dialog.RangeInput.Prompt = "Apply to range: "
-	dialog.RangeInput.Width = max(innerWidth-18, 1)
-	dialog.ValueInput.Width = max(innerWidth-12, 1)
+	dialog.RangeInput.Prompt = "Range: "
+	dialog.RangeInput.Width = max(innerWidth-lipgloss.Width(dialog.RangeInput.Prompt), 1)
+	dialog.ValueInput.Prompt = "Value: "
+	dialog.ValueInput.Width = max(innerWidth-lipgloss.Width(dialog.ValueInput.Prompt), 1)
+
 	accent := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6))
 	dim := lipgloss.NewStyle().Foreground(ANSIColor(8))
 	selected := func(value string, focused bool) string {
@@ -327,87 +368,330 @@ func (dialog *conditionalDialogState) View(width, height int) string {
 		}
 		return style.Render(value)
 	}
-	tabLine := selected("Single color", dialog.Focus == 1 && dialog.Mode == conditionalSingleColor) + "   " + selected("Color scale", dialog.Focus == 1 && dialog.Mode == conditionalColorScale)
-	lines := []string{accent.Render("Conditional formatting"), tabLine, dialog.RangeInput.View()}
-	if dialog.Mode == conditionalSingleColor {
-		operator := conditionalOperators[dialog.Operator].label
+	lines := make([]string, 0, 24)
+	controls := make([]conditionalDialogControl, 0, 16)
+	addLine := func(value string) int {
+		row := len(lines)
+		lines = append(lines, truncate(value, innerWidth))
+		return row
+	}
+	addFullControl := func(row int, action string, value int) {
+		controls = append(controls, conditionalDialogControl{
+			XStart: 2, XEnd: 2 + innerWidth, Y: row + 1, Action: action, Value: value,
+		})
+	}
+	addTextControl := func(row int, text, action string, value int) {
+		index := strings.Index(lines[row], text)
+		if index < 0 {
+			return
+		}
+		x := 2 + lipgloss.Width(lines[row][:index])
+		controls = append(controls, conditionalDialogControl{
+			XStart: x, XEnd: x + lipgloss.Width(text), Y: row + 1, Action: action, Value: value,
+		})
+	}
+	addButtonRow := func() {
+		row := addLine(selected("Cancel", dialog.Focus == dialog.cancelFocus()) + "    " + selected("Done", dialog.Focus == dialog.doneFocus()))
+		addTextControl(row, "Cancel", "cancel", 0)
+		addTextControl(row, "Done", "done", 0)
+	}
+	addDrafts := func() {
 		if compact {
-			lines = append(lines, "Condition: "+selected(operator, dialog.Focus == 2), dialog.ValueInput.View(), selected("Fill:"+compactColor(dialog.FillRGB), dialog.Focus == 4)+" "+selected("Font:"+compactColor(dialog.FontRGB), dialog.Focus == 5), "Preview: "+dialog.Preview(), selected("+ Add another rule", dialog.Focus == 6)+"   "+selected("Done", dialog.Focus == 7)+"   "+selected("Cancel", dialog.Focus == 8))
+			if len(dialog.Rules) == 0 {
+				addLine(dim.Render("Drafts: none"))
+				return
+			}
+			summaries := make([]string, 0, len(dialog.Rules))
+			for index, rule := range dialog.Rules {
+				summaries = append(summaries, conditionalRuleSummary(index, rule))
+			}
+			addLine(truncate("Drafts: "+strings.Join(summaries, " · "), innerWidth))
+			return
+		}
+		addLine(accent.Render("Current draft rules"))
+		if len(dialog.Rules) == 0 {
+			addLine(dim.Render("No rules added yet"))
+			return
+		}
+		for index, rule := range dialog.Rules {
+			addLine(truncate(conditionalRuleSummary(index, rule), innerWidth))
+		}
+	}
+	addSectionGap := func() {
+		if height >= 24 && !dialog.ConditionMenuOpen {
+			addLine("")
+		}
+	}
+
+	if compact {
+		modeRow := addLine(selected("Single", dialog.Mode == conditionalSingleColor && dialog.Focus == 1) + "   " + selected("Scale", dialog.Mode == conditionalColorScale && dialog.Focus == 1))
+		addTextControl(modeRow, "Single", "single", 0)
+		addTextControl(modeRow, "Scale", "scale", 0)
+		rangeRow := addLine(dialog.inputView(&dialog.RangeInput))
+		addFullControl(rangeRow, "range", 0)
+		if dialog.Mode == conditionalSingleColor {
+			operator := "If: " + selected(conditionalOperators[dialog.Operator].label+"  ▾", dialog.Focus == 2)
+			conditionRow := addLine(operator)
+			addFullControl(conditionRow, "condition", 0)
+			if dialog.ConditionMenuOpen {
+				for start := 0; start < len(conditionalOperators); start += 3 {
+					end := min(start+3, len(conditionalOperators))
+					labels := make([]string, 0, end-start)
+					for index := start; index < end; index++ {
+						label := conditionalOperators[index].label
+						if conditionalOperators[index].operator == workbook.GreaterThan {
+							label = "Greater"
+						} else if conditionalOperators[index].operator == workbook.LessThan {
+							label = "Less"
+						} else if conditionalOperators[index].operator == workbook.Equal {
+							label = "Equal"
+						} else if conditionalOperators[index].operator == workbook.Blank {
+							label = "Blank"
+						} else {
+							label = "Text"
+						}
+						labels = append(labels, label)
+					}
+					row := addLine(strings.Join(labels, "   "))
+					for offset, label := range labels {
+						addTextControl(row, label, "operator", start+offset)
+					}
+				}
+			}
+			valueRow := addLine(dialog.inputView(&dialog.ValueInput))
+			addFullControl(valueRow, "value", 0)
+			styleRow := addLine(selected("F:"+compactColor(dialog.FillRGB), dialog.Focus == 4) + "   " + selected("T:"+compactColor(dialog.FontRGB), dialog.Focus == 5))
+			addTextControl(styleRow, "F:", "fill", 0)
+			addTextControl(styleRow, "T:", "font", 0)
+			if !dialog.ConditionMenuOpen {
+				if dialog.Error != "" {
+					addLine(lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
+				}
+				addDrafts()
+			}
 		} else {
-			lines = append(lines, "Format rules", "Condition: "+selected(operator, dialog.Focus == 2)+"  ↑↓ change", dialog.ValueInput.View(), "Fill color: "+selected(colorName(dialog.FillRGB)+"  Enter choose", dialog.Focus == 4), "Font color: "+selected(colorName(dialog.FontRGB)+"  Enter choose", dialog.Focus == 5), "Preview: "+dialog.Preview(), selected("+ Add another rule", dialog.Focus == 6), dim.Render("Tab: next   Enter: select   Esc: cancel"), selected("Cancel", dialog.Focus == 8)+"    "+selected("Done", dialog.Focus == 7))
+			toggleRow := addLine(selected("2-color", !dialog.ThreeColor) + "   " + selected("3-color", dialog.ThreeColor))
+			addTextControl(toggleRow, "2-color", "toggle-scale", 2)
+			addTextControl(toggleRow, "3-color", "toggle-scale", 3)
+			minimumRow := addLine("Min: " + compactColor(dialog.Scale.MinRGB))
+			addFullControl(minimumRow, "min", 0)
+			if dialog.ThreeColor {
+				midpointRow := addLine("Mid: " + compactColor(dialog.Scale.MidRGB))
+				addFullControl(midpointRow, "mid", 0)
+			}
+			maximumRow := addLine("Max: " + compactColor(dialog.Scale.MaxRGB))
+			addFullControl(maximumRow, "max", 0)
+			if dialog.Error != "" {
+				addLine(lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
+			} else {
+				addDrafts()
+			}
+		}
+		if !dialog.ConditionMenuOpen {
+			actionRow := addLine(selected("Add rule", dialog.Focus == dialog.addFocus()) + "  " + selected("Done", dialog.Focus == dialog.doneFocus()) + "  " + selected("Cancel", dialog.Focus == dialog.cancelFocus()))
+			addTextControl(actionRow, "Add rule", "add", 0)
+			addTextControl(actionRow, "Done", "done", 0)
+			addTextControl(actionRow, "Cancel", "cancel", 0)
+		} else {
+			actionRow := addLine(selected("Done", dialog.Focus == dialog.doneFocus()) + "   " + selected("Cancel", dialog.Focus == dialog.cancelFocus()))
+			addTextControl(actionRow, "Done", "done", 0)
+			addTextControl(actionRow, "Cancel", "cancel", 0)
 		}
 	} else {
-		variant := "3-color scale"
-		if !dialog.ThreeColor {
-			variant = "2-color scale"
-		}
-		if compact {
-			lines = append(lines, selected(variant+" · press 2 or 3", dialog.Focus == 1), "Min: "+colorName(dialog.Scale.MinRGB), "Mid: "+colorName(dialog.Scale.MidRGB)+"   Max: "+colorName(dialog.Scale.MaxRGB), "Preview: "+dialog.Preview(), selected("+ Add rule", dialog.Focus == 5)+"   "+selected("Done", dialog.Focus == 6)+"   "+selected("Cancel", dialog.Focus == 7))
+		addLine(accent.Render("Conditional formatting"))
+		tabRow := addLine(selected("Single color", dialog.Mode == conditionalSingleColor && dialog.Focus == 1) + "    " + selected("Color scale", dialog.Mode == conditionalColorScale && dialog.Focus == 1))
+		addTextControl(tabRow, "Single color", "single", 0)
+		addTextControl(tabRow, "Color scale", "scale", 0)
+		addSectionGap()
+		addLine(accent.Render("Apply to range"))
+		rangeRow := addLine(dialog.inputView(&dialog.RangeInput))
+		addFullControl(rangeRow, "range", 0)
+		addSectionGap()
+		addLine(accent.Render("Rule type and criteria"))
+		if dialog.Mode == conditionalSingleColor {
+			conditionRow := addLine("Condition: " + selected(conditionalOperators[dialog.Operator].label+"  ▾", dialog.Focus == 2))
+			addFullControl(conditionRow, "condition", 0)
+			if dialog.ConditionMenuOpen {
+				for index, operator := range conditionalOperators {
+					row := addLine("  " + operator.label)
+					addFullControl(row, "operator", index)
+				}
+			}
+			valueRow := addLine(dialog.inputView(&dialog.ValueInput))
+			addFullControl(valueRow, "value", 0)
+			addSectionGap()
+			addLine(accent.Render("Formatting style"))
+			fillRow := addLine("Fill color: " + colorName(dialog.FillRGB) + "   click to choose")
+			addFullControl(fillRow, "fill", 0)
+			fontRow := addLine("Font color: " + colorName(dialog.FontRGB) + "   click to choose")
+			addFullControl(fontRow, "font", 0)
+			addLine("Preview: " + dialog.Preview())
+			addSectionGap()
 		} else {
-			lines = append(lines, selected(variant+" · press 2 or 3", dialog.Focus == 1), selected("Minimum: "+colorName(dialog.Scale.MinRGB)+"  Enter choose", dialog.Focus == 2), selected("Midpoint: "+colorName(dialog.Scale.MidRGB)+"  Enter choose", dialog.Focus == 3), selected("Maximum: "+colorName(dialog.Scale.MaxRGB)+"  Enter choose", dialog.Focus == 4), "Preview: "+dialog.Preview(), selected("+ Add another rule", dialog.Focus == 5), dim.Render("Tab: next   Enter: select   Esc: cancel"), selected("Cancel", dialog.Focus == 7)+"    "+selected("Done", dialog.Focus == 6))
+			addSectionGap()
+			addLine(accent.Render("Formatting style"))
+			toggleRow := addLine(selected("2-color scale", !dialog.ThreeColor) + "    " + selected("3-color scale", dialog.ThreeColor))
+			addTextControl(toggleRow, "2-color scale", "toggle-scale", 2)
+			addTextControl(toggleRow, "3-color scale", "toggle-scale", 3)
+			minimumRow := addLine("Minimum: " + colorName(dialog.Scale.MinRGB) + "   click to choose")
+			addFullControl(minimumRow, "min", 0)
+			if dialog.ThreeColor {
+				midpointRow := addLine("Midpoint: " + colorName(dialog.Scale.MidRGB) + "   click to choose")
+				addFullControl(midpointRow, "mid", 0)
+			}
+			maximumRow := addLine("Maximum: " + colorName(dialog.Scale.MaxRGB) + "   click to choose")
+			addFullControl(maximumRow, "max", 0)
+			addLine("Preview: " + dialog.Preview())
+			addSectionGap()
 		}
+		if len(dialog.Rules) == 0 {
+			addLine(dim.Render("No rules added yet"))
+		} else {
+			for index, rule := range dialog.Rules {
+				addLine(truncate(conditionalRuleSummary(index, rule), innerWidth))
+			}
+		}
+		addRow := addLine(selected("+ Add another rule", dialog.Focus == dialog.addFocus()))
+		addFullControl(addRow, "add", 0)
+		if dialog.Error != "" {
+			addLine(lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
+		}
+		addButtonRow()
 	}
-	if dialog.Error != "" {
-		lines = append(lines, lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
-	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ANSIColor(6)).Padding(0, 1).Width(innerWidth).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+
+	popup := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ANSIColor(6)).Padding(0, 1).Width(innerWidth).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return conditionalDialogLayout{View: popup, Bounds: overlayBounds(popup, width, height), Controls: controls}
 }
-func (dialog *conditionalDialogState) tinyView(width int) string {
-	dialog.RangeInput.Prompt = "Range: "
-	dialog.RangeInput.Width = max(width-8, 1)
-	dialog.ValueInput.Width = max(width-8, 1)
-	selected := func(value string, focused bool) string {
-		style := lipgloss.NewStyle()
-		if focused {
-			style = style.Reverse(true).Bold(true)
-		}
-		return style.Render(value)
+
+func (dialog *conditionalDialogState) HandleMouse(message tea.MouseMsg, width, height int) string {
+	event := tea.MouseEvent(message)
+	if !dialog.Open || event.Action != tea.MouseActionPress || event.Button != tea.MouseButtonLeft {
+		return ""
 	}
-	header := lipgloss.NewStyle().Bold(true).Foreground(ANSIColor(6)).Render("Cond: ") +
-		selected("Single", dialog.Focus == 1 && dialog.Mode == conditionalSingleColor) + " / " +
-		selected("Scale", dialog.Focus == 1 && dialog.Mode == conditionalColorScale)
-	lines := []string{header, dialog.RangeInput.View()}
+	layout := dialog.layout(width, height)
+	if event.X < layout.Bounds.X || event.X >= layout.Bounds.X+layout.Bounds.Width || event.Y < layout.Bounds.Y || event.Y >= layout.Bounds.Y+layout.Bounds.Height {
+		return ""
+	}
+	x, y := event.X-layout.Bounds.X, event.Y-layout.Bounds.Y
+	for _, control := range layout.Controls {
+		if x >= control.XStart && x < control.XEnd && y == control.Y {
+			control.ClickX = x
+			return dialog.activateMouseControl(control)
+		}
+	}
+	return ""
+}
+
+func (dialog *conditionalDialogState) activateMouseControl(control conditionalDialogControl) string {
+	switch control.Action {
+	case "single":
+		dialog.Mode = conditionalSingleColor
+		dialog.ConditionMenuOpen = false
+		dialog.Focus = 1
+		dialog.Error = ""
+		dialog.syncInputFocus()
+	case "scale":
+		dialog.Mode = conditionalColorScale
+		dialog.ConditionMenuOpen = false
+		dialog.Focus = 1
+		dialog.Error = ""
+		dialog.syncInputFocus()
+	case "range":
+		dialog.Focus = 0
+		dialog.RangeInput.SetCursor(clamp(control.ClickX-control.XStart-lipgloss.Width(dialog.RangeInput.Prompt), 0, len([]rune(dialog.RangeInput.Value()))))
+		dialog.syncInputFocus()
+	case "value":
+		dialog.Focus = 3
+		dialog.ValueInput.SetCursor(clamp(control.ClickX-control.XStart-lipgloss.Width(dialog.ValueInput.Prompt), 0, len([]rune(dialog.ValueInput.Value()))))
+		dialog.syncInputFocus()
+	case "condition":
+		dialog.ConditionMenuOpen = !dialog.ConditionMenuOpen
+		dialog.Focus = 2
+		dialog.Error = ""
+		dialog.syncInputFocus()
+	case "operator":
+		dialog.Operator = control.Value
+		dialog.ConditionMenuOpen = false
+		dialog.Focus = 2
+		dialog.Error = ""
+		dialog.syncInputFocus()
+	case "fill":
+		dialog.Focus = 4
+		dialog.ColorField = "fill"
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "font":
+		dialog.Focus = 5
+		dialog.ColorField = "font"
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "min":
+		dialog.Focus = 2
+		dialog.ColorField = "min"
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "mid":
+		dialog.Focus = 3
+		dialog.ColorField = "mid"
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "max":
+		dialog.Focus = 4
+		dialog.ColorField = "max"
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "toggle-scale":
+		dialog.ThreeColor = control.Value == 3
+		dialog.ScaleDraftActive = true
+		dialog.Error = ""
+		dialog.Focus = 1
+		dialog.syncInputFocus()
+	case "add":
+		dialog.Focus = dialog.addFocus()
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "done":
+		dialog.Focus = dialog.doneFocus()
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	case "cancel":
+		dialog.Focus = dialog.cancelFocus()
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	}
+	return ""
+}
+
+func (dialog *conditionalDialogState) addFocus() int {
 	if dialog.Mode == conditionalColorScale {
-		variant := "3-color"
-		if !dialog.ThreeColor {
-			variant = "2-color"
-		}
-		lines = append(lines,
-			selected(variant, dialog.Focus == 1),
-			selected("Min:"+compactColor(dialog.Scale.MinRGB), dialog.Focus == 2),
-		)
-		if dialog.ThreeColor {
-			lines = append(lines, selected("Mid:"+compactColor(dialog.Scale.MidRGB), dialog.Focus == 3))
-		}
-		lines = append(lines, selected("Max:"+compactColor(dialog.Scale.MaxRGB), dialog.Focus == 4))
-	} else {
-		operator := ">"
-		switch conditionalOperators[dialog.Operator].operator {
-		case workbook.LessThan:
-			operator = "<"
-		case workbook.Equal:
-			operator = "="
-		case workbook.Blank:
-			operator = "blank"
-		case workbook.TextContains:
-			operator = "contains"
-		}
-		lines = append(lines,
-			selected("If "+operator, dialog.Focus == 2),
-			dialog.ValueInput.View(),
-			selected("F:"+compactColor(dialog.FillRGB), dialog.Focus == 4)+" "+selected("T:"+compactColor(dialog.FontRGB), dialog.Focus == 5),
-			truncate("Preview: "+dialog.Preview(), max(width-2, 1)),
-		)
+		return 5
 	}
-	if dialog.Error != "" {
-		lines = append(lines, lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(truncate(dialog.Error, max(width-2, 1))))
-	}
-	addFocus, doneFocus, cancelFocus := 6, 7, 8
+	return 6
+}
+
+func (dialog *conditionalDialogState) doneFocus() int {
 	if dialog.Mode == conditionalColorScale {
-		addFocus, doneFocus, cancelFocus = 5, 6, 7
+		return 6
 	}
-	lines = append(lines, selected("+Rule", dialog.Focus == addFocus)+" "+selected("Done", dialog.Focus == doneFocus)+" "+selected("Cancel", dialog.Focus == cancelFocus))
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ANSIColor(6)).Padding(0, 1).Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return 7
+}
+
+func (dialog *conditionalDialogState) cancelFocus() int {
+	if dialog.Mode == conditionalColorScale {
+		return 7
+	}
+	return 8
+}
+
+func conditionalRuleSummary(index int, rule workbook.ConditionalRule) string {
+	if rule.ColorScale != nil {
+		scale := rule.ColorScale
+		return fmt.Sprintf("%d. Color scale %s → %s → %s", index+1, colorName(scale.MinRGB), colorName(scale.MidRGB), colorName(scale.MaxRGB))
+	}
+	label := "Condition"
+	for _, operator := range conditionalOperators {
+		if operator.operator == rule.Operator {
+			label = operator.label
+			break
+		}
+	}
+	style := colorName(rule.FillRGB)
+	if rule.FillRGB == "" && rule.FontRGB != "" {
+		style = "font " + colorName(rule.FontRGB)
+	}
+	return fmt.Sprintf("%d. %s %s · %s", index+1, label, rule.Value, style)
 }
 
 func (dialog *conditionalDialogState) Preview() string {
@@ -433,6 +717,7 @@ func colorName(rgb string) string {
 	}
 	return "#" + strings.TrimPrefix(strings.ToUpper(rgb), "#")
 }
+
 func compactColor(rgb string) string {
 	if rgb == "" {
 		return "—"

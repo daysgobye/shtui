@@ -167,9 +167,9 @@ func TestConditionalDialogFitsSmallViewport(t *testing.T) {
 	model.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	model.runCommand("conditional-format")
 	view := model.View()
-	for _, action := range []string{"Done", "Cancel"} {
+	for _, action := range []string{"Range:", "If", "Value:", "F:", "T:", "Done", "Cancel"} {
 		if !strings.Contains(view, action) {
-			t.Fatalf("height-10 dialog hid the %q action: %q", action, view)
+			t.Fatalf("height-10 dialog hid required control %q: %q", action, view)
 		}
 	}
 	if lines := strings.Split(view, "\n"); len(lines) > 10 {
@@ -182,9 +182,9 @@ func TestConditionalDialogFitsSmallViewport(t *testing.T) {
 	}
 	model.ConditionalDialog.Mode = conditionalColorScale
 	view = model.View()
-	for _, action := range []string{"Done", "Cancel"} {
+	for _, action := range []string{"Range:", "Min:", "Max:", "Done", "Cancel"} {
 		if !strings.Contains(view, action) {
-			t.Fatalf("height-10 color-scale dialog hid the %q action: %q", action, view)
+			t.Fatalf("height-10 color-scale dialog hid required control %q: %q", action, view)
 		}
 	}
 	if lines := strings.Split(view, "\n"); len(lines) > 10 {
@@ -482,4 +482,162 @@ func TestFilteredNavigationSkipsHiddenRows(t *testing.T) {
 	if model.Grid.Selected.Row != 2 {
 		t.Fatalf("Down selected row %d, want visible row 3 (zero-based 2)", model.Grid.Selected.Row)
 	}
+}
+
+func TestConditionalDialogMouseSwitchesTabsAndChoosesCondition(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+
+	clickDialogText(t, &model, "Color scale")
+	if model.ConditionalDialog.Mode != conditionalColorScale {
+		t.Fatalf("mode after clicking Color scale = %d, want color scale", model.ConditionalDialog.Mode)
+	}
+	clickDialogText(t, &model, "Single color")
+	if model.ConditionalDialog.Mode != conditionalSingleColor {
+		t.Fatalf("mode after clicking Single color = %d, want single color", model.ConditionalDialog.Mode)
+	}
+	clickDialogText(t, &model, "Condition:")
+	if !model.ConditionalDialog.ConditionMenuOpen {
+		t.Fatal("clicking condition did not open its choices")
+	}
+	clickDialogText(t, &model, "Less than")
+	if model.ConditionalDialog.Operator != 1 || model.ConditionalDialog.ConditionMenuOpen {
+		t.Fatalf("condition selection: operator=%d menuOpen=%t, want Less than and closed", model.ConditionalDialog.Operator, model.ConditionalDialog.ConditionMenuOpen)
+	}
+}
+
+func TestConditionalDialogMouseFocusesRangeAndValueInputs(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+
+	clickDialogText(t, &model, "Range:")
+	if model.ConditionalDialog.Focus != 0 {
+		t.Fatalf("range click focus = %d, want 0", model.ConditionalDialog.Focus)
+	}
+	clickDialogText(t, &model, "Value:")
+	if model.ConditionalDialog.Focus != 3 {
+		t.Fatalf("value click focus = %d, want 3", model.ConditionalDialog.Focus)
+	}
+}
+
+func TestConditionalDialogMouseOpensColorControls(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		mode       int
+		target     string
+		colorField string
+	}{
+		{name: "fill", mode: conditionalSingleColor, target: "Fill color", colorField: "fill"},
+		{name: "font", mode: conditionalSingleColor, target: "Font color", colorField: "font"},
+		{name: "minimum", mode: conditionalColorScale, target: "Minimum:", colorField: "min"},
+		{name: "midpoint", mode: conditionalColorScale, target: "Midpoint:", colorField: "mid"},
+		{name: "maximum", mode: conditionalColorScale, target: "Maximum:", colorField: "max"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+			model.runCommand("conditional-format")
+			model.ConditionalDialog.Mode = testCase.mode
+
+			clickDialogText(t, &model, testCase.target)
+
+			if !model.ColorPicker.Open || model.ConditionalDialog.ColorField != testCase.colorField {
+				t.Fatalf("color click: pickerOpen=%t field=%q, want true/%q", model.ColorPicker.Open, model.ConditionalDialog.ColorField, testCase.colorField)
+			}
+		})
+	}
+}
+
+func TestConditionalDialogMouseTogglesScaleColors(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	model.ConditionalDialog.Mode = conditionalColorScale
+
+	clickDialogText(t, &model, "2-color scale")
+	if model.ConditionalDialog.ThreeColor {
+		t.Fatal("clicking 2-color scale left midpoint enabled")
+	}
+	clickDialogText(t, &model, "3-color scale")
+	if !model.ConditionalDialog.ThreeColor {
+		t.Fatal("clicking 3-color scale did not enable midpoint")
+	}
+}
+
+func TestConditionalDialogShowsAddedRuleSummaries(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	model.ConditionalDialog.ValueInput.SetValue("5")
+	model.ConditionalDialog.FillRGB = "CD0000"
+
+	clickDialogText(t, &model, "+ Add another rule")
+
+	if len(model.ConditionalDialog.Rules) != 1 || model.ConditionalDialog.Rules[0].Value != "5" {
+		t.Fatalf("draft rules after mouse Add = %#v, want the completed rule", model.ConditionalDialog.Rules)
+	}
+	if got := model.session.Workbook.Sheets[0].ConditionalRules; len(got) != 0 {
+		t.Fatalf("Add mutated workbook before Done: %#v", got)
+	}
+	if view := model.View(); !strings.Contains(view, "1. Greater than 5") {
+		t.Fatalf("view does not summarize added draft: %q", view)
+	}
+}
+
+func TestConditionalDialogMouseDoneAppliesVisibleDraftsOnce(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	model.ConditionalDialog.Rules = []workbook.ConditionalRule{{
+		Operator: workbook.GreaterThan, Value: "3", FillRGB: "CD0000",
+	}}
+	model.ConditionalDialog.ValueInput.SetValue("5")
+	model.ConditionalDialog.FillRGB = "00CD00"
+
+	clickDialogText(t, &model, "Done")
+
+	rules := model.session.Workbook.Sheets[0].ConditionalRules
+	if model.ConditionalDialog.Open || len(rules) != 2 || rules[0].Value != "3" || rules[1].Value != "5" {
+		t.Fatalf("Done applied rules = %#v dialogOpen=%t, want both drafts once", rules, model.ConditionalDialog.Open)
+	}
+}
+
+func TestConditionalDialogMouseCancelLeavesWorkbookUnchanged(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	model.ConditionalDialog.ValueInput.SetValue("5")
+	model.ConditionalDialog.FillRGB = "CD0000"
+
+	clickDialogText(t, &model, "Cancel")
+
+	if model.ConditionalDialog.Open || len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 {
+		t.Fatalf("Cancel left dialog open or changed rules: open=%t rules=%#v", model.ConditionalDialog.Open, model.session.Workbook.Sheets[0].ConditionalRules)
+	}
+}
+
+func TestConditionalDialogMouseOutsideDoesNotApplyDraft(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.width, model.height = 80, 24
+	model.runCommand("conditional-format")
+	model.ConditionalDialog.ValueInput.SetValue("5")
+	model.ConditionalDialog.FillRGB = "CD0000"
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: 0, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+
+	if !model.ConditionalDialog.Open || len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 {
+		t.Fatalf("outside click: dialogOpen=%t rules=%#v, want open and unchanged", model.ConditionalDialog.Open, model.session.Workbook.Sheets[0].ConditionalRules)
+	}
+}
+
+func clickDialogText(t *testing.T, model *AppModel, target string) {
+	t.Helper()
+	view := model.View()
+	for y, line := range strings.Split(view, "\n") {
+		if index := strings.Index(line, target); index >= 0 {
+			x := ansi.StringWidth(line[:index])
+			model.Update(tea.MouseMsg(tea.MouseEvent{
+				X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+			}))
+			return
+		}
+	}
+	t.Fatalf("rendered dialog has no %q: %q", target, view)
 }
