@@ -9,7 +9,7 @@ go build -o shtui ./cmd/omasheet
 ./shtui [workbook.csv|workbook.xlsx]
 ```
 
-With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook** from the home screen or command palette. Loading and saving run asynchronously. A failed open keeps the current workbook; a failed save keeps it dirty and reports the cause. **Save as** chooses a new path but does not convert between CSV and XLSX; keep the destination extension consistent with the current workbook.
+With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook** from the home screen or command palette. Loading and saving run asynchronously. A failed open keeps the current workbook; a failed save keeps it dirty and reports the cause. **Save as** opens a floating picker and proposes the current file's basename with the format's extension. CSV-to-XLSX conversion is available from the save-choice dialog when CSV cannot preserve workbook features.
 
 ## Grid and editing
 
@@ -17,6 +17,7 @@ With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook
 - Enter commits and selects the cell below ready to type; Tab commits and selects the cell to the right. Esc cancels without committing.
 - Drag with the left mouse button to select a rectangular range. Drag a column-header boundary to resize that column; column labels stay visible when the toolbar is hidden. The mouse wheel scrolls.
 - Click a sheet tab or use Ctrl+PageUp / Ctrl+PageDown to switch sheets. **Add sheet** creates a sheet and activates it. **Insert row** and **Insert column** insert before the selected cell.
+- Merged ranges are edited through their top-left cell. Clicking or navigating inside a merged range selects that anchor; its text wraps within the merge's existing width and height, with overflow ellipsized rather than changing row heights.
 - Ctrl+Z / Ctrl+Y undo and redo. **Find** searches the active sheet for a case-insensitive substring.
 - The formula bar shows the selected cell's source input. Enter formulas directly with `=`, for example `=SUM(A1:A5)`. Select ranges with the mouse, or use **Insert function** to open the supported-function picker and set its range and result cell. For `IF`, enter all three comma-separated arguments, for example `A1>0,"yes","no"`; the picker builds `=IF(A1>0,"yes","no")`.
 
@@ -24,19 +25,19 @@ The initial formula scope is arithmetic, cell references/ranges, and common func
 
 ## Formatting and data operations
 
-Ctrl+P opens the centered, searchable command palette over the current sheet. Search for an action or a shortcut; commands show their keybinding when one exists. The palette remains available when the toolbar is hidden. Press Ctrl+T or choose **Toggle toolbar** to hide/show the toolbar.
+Ctrl+P opens the centered, searchable command palette over the current sheet. Search for an action or shortcut; commands show their keybinding when one exists. The palette remains available when the toolbar is hidden. The toolbar keeps **Conditional** and **ƒx** visible as primary actions when space permits, moving other actions under **More** at narrow widths. Press Ctrl+T or choose **Toggle toolbar** to hide/show the toolbar; column labels stay visible.
 
 - Ctrl+O opens the floating file picker. Use the arrow keys to browse and Enter to open; Esc cancels. **Save as** uses the same popup flow.
 - **Fill color** and **Font color** open terminal theme colors first, followed by custom RGB input (`#RRGGBB`). Theme colors are resolved only when selected. The app uses truecolor when supported and nearest ANSI colors otherwise.
 - **Toggle bold** switches bold for the selected cell or range.
 - **All borders**, **Outside borders**, **Top border**, **Bottom border**, **Left border**, **Right border**, and **Remove borders** apply to the selected range.
 - **Merge selected cells** merges the selection. If non-top-left cells contain data, the app asks before discarding those values. **Unmerge selected cells** removes the merge.
-- **Add conditional formatting** opens a dialog for an editable A1 range. Choose a single-color rule (greater than, less than, equal to, blank, or text contains) with fill/font color, or a two-/three-color scale. Theme colors precede custom RGB colors. Add multiple rule drafts, review the preview, then choose **Done** to apply; **Cancel** discards the drafts.
+- **Add conditional formatting** opens a dialog for an editable A1 range. Choose a single-color rule (greater than, less than, equal to, blank, or text contains) with fill/font color, or a two-/three-color scale. Theme colors precede custom RGB colors. Use Tab / Shift+Tab to move through controls, arrows to choose conditions or scale type, Enter to open color pickers and activate Add, Remove, Done, or Cancel; Esc closes without applying. The dialog shows a preview and draft rule list. Add multiple rule drafts, review the preview, then choose **Done** to apply; **Cancel** discards the drafts.
 - **Sort by selected column** sorts the contiguous data block containing the active row, moving whole rows together. Choose `a` for ascending with a header, `d` for descending with a header, or `h` for ascending without a header.
 - **Filter selected column** accepts allowed values separated by semicolons. Press Enter with no values to clear filters. Filters hide rows without deleting data.
 
 ## File format behavior
 
-CSV contains one sheet and has no native styles, merges, formulas, or workbook metadata. Formula source is saved as CSV text; formatting and other-sheet content cannot be represented. Shtui warns before a CSV save that would discard styles or extra sheets.
+CSV contains one sheet and has no native styles, merges, formulas, or workbook metadata. Formula source is saved as CSV text; formatting and other-sheet content cannot be represented. After a successful workbook-only change, Shtui briefly shows a corner notice that CSV cannot preserve the feature. When saving, **Save as CSV** exports only the active sheet's cell inputs and drops workbook-only features; **Save as XLSX** converts the live workbook and keeps the supported workbook state; **Cancel** leaves the session unchanged. CSV export does not remove features from the live workbook, so the warning appears again if you save it as CSV later.
 
 XLSX retains workbook content through Excelize, including content not directly editable in the terminal UI when the library can round-trip it. Shtui does not execute macros and does not implement all Excel features. Formula calculation and conditional-format evaluation are limited to the supported subset. Keep backups of workbooks that depend on unsupported Excel features; do not assume every Excel-specific feature is editable or recalculated by Shtui.
