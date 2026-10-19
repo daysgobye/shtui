@@ -211,12 +211,7 @@ func TestFilledMergedCellKeepsOuterBorders(t *testing.T) {
 	if !strings.Contains(ansi.Strip(rows[2]), "┃") || !strings.Contains(ansi.Strip(rows[4]), "┃") {
 		t.Fatalf("merged cell lost outer vertical borders: first=%q second=%q", ansi.Strip(rows[2]), ansi.Strip(rows[4]))
 	}
-	for x := grid.RowHeaderWidth - 1; x < grid.RowHeaderWidth+2*defaultColumnWidth-1; x++ {
-		glyph, style := renderedCellAt(rows[3], x)
-		if glyph != " " || colorParameters(style) != "" {
-			t.Fatalf("merged interior boundary at x=%d = %q with colors %q; want an unstyled space", x, glyph, colorParameters(style))
-		}
-	}
+	assertFillBackground(t, rows[3], grid.RowHeaderWidth+1, " ", fill)
 	borderColor, err := ParseRGBHex("#" + border.ColorRGB)
 	if err != nil {
 		t.Fatal(err)
