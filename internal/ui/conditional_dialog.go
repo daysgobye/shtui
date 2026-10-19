@@ -80,6 +80,12 @@ func (dialog *conditionalDialogState) HandleKey(message tea.KeyMsg) string {
 	case tea.KeyEsc:
 		dialog.Open = false
 		return "cancel"
+	case tea.KeyShiftTab:
+		dialog.Focus = (dialog.Focus - 1 + dialog.focusCount()) % dialog.focusCount()
+		dialog.ConditionMenuOpen = false
+		dialog.Error = ""
+		dialog.syncInputFocus()
+		return ""
 	case tea.KeyTab:
 		dialog.Focus = (dialog.Focus + 1) % dialog.focusCount()
 		dialog.ConditionMenuOpen = false
@@ -95,13 +101,17 @@ func (dialog *conditionalDialogState) HandleKey(message tea.KeyMsg) string {
 		dialog.syncInputFocus()
 		return action
 	case tea.KeyLeft:
-		if dialog.Focus == 1 {
+		if dialog.Mode == conditionalColorScale && dialog.Focus == 2 {
+			dialog.setThreeColor(false)
+		} else if dialog.Focus == 1 {
 			dialog.Mode = conditionalSingleColor
 			dialog.ConditionMenuOpen = false
 			dialog.Error = ""
 		}
 	case tea.KeyRight:
-		if dialog.Focus == 1 {
+		if dialog.Mode == conditionalColorScale && dialog.Focus == 2 {
+			dialog.setThreeColor(true)
+		} else if dialog.Focus == 1 {
 			dialog.Mode = conditionalColorScale
 			dialog.ConditionMenuOpen = false
 			dialog.Error = ""
@@ -116,15 +126,17 @@ func (dialog *conditionalDialogState) HandleKey(message tea.KeyMsg) string {
 			dialog.Error = ""
 			return ""
 		}
+		if dialog.Mode == conditionalColorScale && dialog.Focus == 2 {
+			dialog.setThreeColor(message.Type == tea.KeyDown)
+			return ""
+		}
 	case tea.KeyRunes:
-		if dialog.Focus == 1 {
+		if dialog.Mode == conditionalColorScale && dialog.Focus == 2 {
 			switch string(message.Runes) {
 			case "2":
-				dialog.ThreeColor = false
-				dialog.Error = ""
+				dialog.setThreeColor(false)
 			case "3":
-				dialog.ThreeColor = true
-				dialog.Error = ""
+				dialog.setThreeColor(true)
 			}
 			return ""
 		}
@@ -147,25 +159,31 @@ func (dialog *conditionalDialogState) HandleKey(message tea.KeyMsg) string {
 
 func (dialog *conditionalDialogState) enter() string {
 	switch dialog.Focus {
-	case 0, 1:
+	case dialog.addFocus():
+		return dialog.addRule()
+	case dialog.removeFocus():
+		dialog.removeLastRule()
+		return ""
+	case dialog.doneFocus():
+		return "done"
+	case dialog.cancelFocus():
+		return "cancel"
+	}
+	switch dialog.Focus {
+	case 0, 1, 2:
 		dialog.Focus++
-	case 2:
-		if dialog.Mode == conditionalSingleColor {
-			dialog.Focus++
-			break
-		}
-		dialog.ColorField = "min"
-		return "color"
 	case 3:
 		if dialog.Mode == conditionalSingleColor {
 			dialog.Focus++
-			break
+		} else {
+			dialog.ColorField = "min"
+			return "color"
 		}
-		dialog.ColorField = "mid"
-		return "color"
 	case 4:
 		if dialog.Mode == conditionalSingleColor {
 			dialog.ColorField = "fill"
+		} else if dialog.ThreeColor {
+			dialog.ColorField = "mid"
 		} else {
 			dialog.ColorField = "max"
 		}
@@ -173,30 +191,54 @@ func (dialog *conditionalDialogState) enter() string {
 	case 5:
 		if dialog.Mode == conditionalSingleColor {
 			dialog.ColorField = "font"
-			return "color"
+		} else {
+			dialog.ColorField = "max"
 		}
-		return dialog.addRule()
-	case 6:
-		if dialog.Mode == conditionalSingleColor {
-			return dialog.addRule()
-		}
-		return "done"
-	case 7:
-		if dialog.Mode == conditionalSingleColor {
-			return "done"
-		}
-		return "cancel"
-	case 8:
-		return "cancel"
+		return "color"
 	}
 	return ""
 }
 
 func (dialog *conditionalDialogState) focusCount() int {
-	if dialog.Mode == conditionalSingleColor {
-		return 9
+	return dialog.cancelFocus() + 1
+}
+
+func (dialog *conditionalDialogState) addFocus() int {
+	if dialog.Mode == conditionalColorScale && !dialog.ThreeColor {
+		return 5
 	}
-	return 8
+	return 6
+}
+
+func (dialog *conditionalDialogState) removeFocus() int {
+	if len(dialog.Rules) == 0 {
+		return -1
+	}
+	return dialog.addFocus() + 1
+}
+
+func (dialog *conditionalDialogState) doneFocus() int {
+	if len(dialog.Rules) > 0 {
+		return dialog.addFocus() + 2
+	}
+	return dialog.addFocus() + 1
+}
+
+func (dialog *conditionalDialogState) cancelFocus() int {
+	return dialog.doneFocus() + 1
+}
+
+func (dialog *conditionalDialogState) setThreeColor(enabled bool) {
+	if dialog.Mode == conditionalColorScale {
+		if enabled && !dialog.ThreeColor && dialog.Focus == 4 {
+			dialog.Focus = 5
+		} else if !enabled && dialog.ThreeColor && dialog.Focus == 5 {
+			dialog.Focus = 4
+		}
+	}
+	dialog.ThreeColor = enabled
+	dialog.ScaleDraftActive = true
+	dialog.Error = ""
 }
 func (dialog *conditionalDialogState) syncInputFocus() {
 	if dialog.Focus == 0 {
@@ -211,6 +253,15 @@ func (dialog *conditionalDialogState) syncInputFocus() {
 	}
 }
 
+func (dialog *conditionalDialogState) removeLastRule() {
+	if len(dialog.Rules) == 0 {
+		return
+	}
+	dialog.Rules = dialog.Rules[:len(dialog.Rules)-1]
+	dialog.Focus = dialog.addFocus()
+	dialog.Error = ""
+}
+
 func (dialog *conditionalDialogState) addRule() string {
 	rules, err := dialog.currentRules()
 	if err != nil {
@@ -222,16 +273,18 @@ func (dialog *conditionalDialogState) addRule() string {
 		return ""
 	}
 	dialog.Rules = append(dialog.Rules, rules[0])
-	if dialog.Mode == conditionalColorScale {
-		dialog.ScaleDraftActive = false
-	}
 	dialog.ValueInput.Reset()
 	dialog.FillRGB = ""
 	dialog.FontRGB = ""
 	dialog.Operator = 0
-	dialog.Focus = 2
 	dialog.ConditionMenuOpen = false
 	dialog.Error = ""
+	if dialog.Mode == conditionalColorScale {
+		dialog.ScaleDraftActive = false
+		dialog.Focus = 3
+	} else {
+		dialog.Focus = 2
+	}
 	return ""
 }
 
@@ -368,6 +421,16 @@ func (dialog *conditionalDialogState) layout(width, height int) conditionalDialo
 		}
 		return style.Render(value)
 	}
+	scaleChoice := func(value string, active, focused bool) string {
+		style := lipgloss.NewStyle()
+		if active {
+			style = style.Foreground(ANSIColor(6)).Bold(true)
+		}
+		if focused {
+			style = style.Reverse(true).Bold(true)
+		}
+		return style.Render(value)
+	}
 	lines := make([]string, 0, 24)
 	controls := make([]conditionalDialogControl, 0, 16)
 	addLine := func(value string) int {
@@ -470,16 +533,16 @@ func (dialog *conditionalDialogState) layout(width, height int) conditionalDialo
 				addDrafts()
 			}
 		} else {
-			toggleRow := addLine(selected("2-color", !dialog.ThreeColor) + "   " + selected("3-color", dialog.ThreeColor))
+			toggleRow := addLine(scaleChoice("2-color", !dialog.ThreeColor, dialog.Focus == 2) + "   " + scaleChoice("3-color", dialog.ThreeColor, dialog.Focus == 2))
 			addTextControl(toggleRow, "2-color", "toggle-scale", 2)
 			addTextControl(toggleRow, "3-color", "toggle-scale", 3)
-			minimumRow := addLine("Min: " + compactColor(dialog.Scale.MinRGB))
+			minimumRow := addLine(selected("Min: "+compactColor(dialog.Scale.MinRGB), dialog.Focus == 3))
 			addFullControl(minimumRow, "min", 0)
 			if dialog.ThreeColor {
-				midpointRow := addLine("Mid: " + compactColor(dialog.Scale.MidRGB))
+				midpointRow := addLine(selected("Mid: "+compactColor(dialog.Scale.MidRGB), dialog.Focus == 4))
 				addFullControl(midpointRow, "mid", 0)
 			}
-			maximumRow := addLine("Max: " + compactColor(dialog.Scale.MaxRGB))
+			maximumRow := addLine(selected("Max: "+compactColor(dialog.Scale.MaxRGB), dialog.Focus == 5))
 			addFullControl(maximumRow, "max", 0)
 			if dialog.Error != "" {
 				addLine(lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
@@ -488,8 +551,16 @@ func (dialog *conditionalDialogState) layout(width, height int) conditionalDialo
 			}
 		}
 		if !dialog.ConditionMenuOpen {
-			actionRow := addLine(selected("Add rule", dialog.Focus == dialog.addFocus()) + "  " + selected("Done", dialog.Focus == dialog.doneFocus()) + "  " + selected("Cancel", dialog.Focus == dialog.cancelFocus()))
-			addTextControl(actionRow, "Add rule", "add", 0)
+			actionText := selected("Add", dialog.Focus == dialog.addFocus())
+			if len(dialog.Rules) > 0 {
+				actionText += " " + selected("Remove", dialog.Focus == dialog.removeFocus())
+			}
+			actionText += " " + selected("Done", dialog.Focus == dialog.doneFocus()) + " " + selected("Cancel", dialog.Focus == dialog.cancelFocus())
+			actionRow := addLine(actionText)
+			addTextControl(actionRow, "Add", "add", 0)
+			if len(dialog.Rules) > 0 {
+				addTextControl(actionRow, "Remove", "remove-last", 0)
+			}
 			addTextControl(actionRow, "Done", "done", 0)
 			addTextControl(actionRow, "Cancel", "cancel", 0)
 		} else {
@@ -513,7 +584,7 @@ func (dialog *conditionalDialogState) layout(width, height int) conditionalDialo
 			addFullControl(conditionRow, "condition", 0)
 			if dialog.ConditionMenuOpen {
 				for index, operator := range conditionalOperators {
-					row := addLine("  " + operator.label)
+					row := addLine("  " + selected(operator.label, dialog.Focus == 2 && dialog.Operator == index))
 					addFullControl(row, "operator", index)
 				}
 			}
@@ -521,29 +592,32 @@ func (dialog *conditionalDialogState) layout(width, height int) conditionalDialo
 			addFullControl(valueRow, "value", 0)
 			addSectionGap()
 			addLine(accent.Render("Formatting style"))
-			fillRow := addLine("Fill color: " + colorName(dialog.FillRGB) + "   click to choose")
+			fillText := "Fill color: " + colorName(dialog.FillRGB) + "   click to choose"
+			fillRow := addLine(selected(fillText, dialog.Focus == 4))
 			addFullControl(fillRow, "fill", 0)
-			fontRow := addLine("Font color: " + colorName(dialog.FontRGB) + "   click to choose")
+			fontText := "Font color: " + colorName(dialog.FontRGB) + "   click to choose"
+			fontRow := addLine(selected(fontText, dialog.Focus == 5))
 			addFullControl(fontRow, "font", 0)
-			addLine("Preview: " + dialog.Preview())
+			addLine(dialog.previewView())
 			addSectionGap()
 		} else {
 			addSectionGap()
 			addLine(accent.Render("Formatting style"))
-			toggleRow := addLine(selected("2-color scale", !dialog.ThreeColor) + "    " + selected("3-color scale", dialog.ThreeColor))
+			toggleRow := addLine(scaleChoice("2-color scale", !dialog.ThreeColor, dialog.Focus == 2) + "    " + scaleChoice("3-color scale", dialog.ThreeColor, dialog.Focus == 2))
 			addTextControl(toggleRow, "2-color scale", "toggle-scale", 2)
 			addTextControl(toggleRow, "3-color scale", "toggle-scale", 3)
-			minimumRow := addLine("Minimum: " + colorName(dialog.Scale.MinRGB) + "   click to choose")
+			minimumRow := addLine(selected("Minimum: "+colorName(dialog.Scale.MinRGB)+"   click to choose", dialog.Focus == 3))
 			addFullControl(minimumRow, "min", 0)
 			if dialog.ThreeColor {
-				midpointRow := addLine("Midpoint: " + colorName(dialog.Scale.MidRGB) + "   click to choose")
+				midpointRow := addLine(selected("Midpoint: "+colorName(dialog.Scale.MidRGB)+"   click to choose", dialog.Focus == 4))
 				addFullControl(midpointRow, "mid", 0)
 			}
-			maximumRow := addLine("Maximum: " + colorName(dialog.Scale.MaxRGB) + "   click to choose")
+			maximumRow := addLine(selected("Maximum: "+colorName(dialog.Scale.MaxRGB)+"   click to choose", dialog.Focus == 5))
 			addFullControl(maximumRow, "max", 0)
-			addLine("Preview: " + dialog.Preview())
+			addLine(dialog.previewView())
 			addSectionGap()
 		}
+		addLine(accent.Render("Current draft rules"))
 		if len(dialog.Rules) == 0 {
 			addLine(dim.Render("No rules added yet"))
 		} else {
@@ -551,8 +625,16 @@ func (dialog *conditionalDialogState) layout(width, height int) conditionalDialo
 				addLine(truncate(conditionalRuleSummary(index, rule), innerWidth))
 			}
 		}
-		addRow := addLine(selected("+ Add another rule", dialog.Focus == dialog.addFocus()))
-		addFullControl(addRow, "add", 0)
+		addRow := addLine(selected("+ Add another rule", dialog.Focus == dialog.addFocus()) + func() string {
+			if len(dialog.Rules) > 0 {
+				return "   " + selected("− Remove last rule", dialog.Focus == dialog.removeFocus())
+			}
+			return ""
+		}())
+		addTextControl(addRow, "+ Add another rule", "add", 0)
+		if len(dialog.Rules) > 0 {
+			addTextControl(addRow, "− Remove last rule", "remove-last", 0)
+		}
 		if dialog.Error != "" {
 			addLine(lipgloss.NewStyle().Foreground(ANSIColor(1)).Render(dialog.Error))
 		}
@@ -624,23 +706,27 @@ func (dialog *conditionalDialogState) activateMouseControl(control conditionalDi
 		dialog.ColorField = "font"
 		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "min":
-		dialog.Focus = 2
+		dialog.Focus = 3
 		dialog.ColorField = "min"
 		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "mid":
-		dialog.Focus = 3
+		dialog.Focus = 4
 		dialog.ColorField = "mid"
 		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "max":
-		dialog.Focus = 4
+		dialog.Focus = 5
+		if dialog.Mode == conditionalColorScale && !dialog.ThreeColor {
+			dialog.Focus = 4
+		}
 		dialog.ColorField = "max"
 		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "toggle-scale":
-		dialog.ThreeColor = control.Value == 3
-		dialog.ScaleDraftActive = true
-		dialog.Error = ""
-		dialog.Focus = 1
+		dialog.setThreeColor(control.Value == 3)
+		dialog.Focus = 2
 		dialog.syncInputFocus()
+	case "remove-last":
+		dialog.Focus = dialog.removeFocus()
+		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "add":
 		dialog.Focus = dialog.addFocus()
 		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
@@ -652,27 +738,6 @@ func (dialog *conditionalDialogState) activateMouseControl(control conditionalDi
 		return dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	}
 	return ""
-}
-
-func (dialog *conditionalDialogState) addFocus() int {
-	if dialog.Mode == conditionalColorScale {
-		return 5
-	}
-	return 6
-}
-
-func (dialog *conditionalDialogState) doneFocus() int {
-	if dialog.Mode == conditionalColorScale {
-		return 6
-	}
-	return 7
-}
-
-func (dialog *conditionalDialogState) cancelFocus() int {
-	if dialog.Mode == conditionalColorScale {
-		return 7
-	}
-	return 8
 }
 
 func conditionalRuleSummary(index int, rule workbook.ConditionalRule) string {
@@ -709,6 +774,40 @@ func (dialog *conditionalDialogState) Preview() string {
 		value = "…"
 	}
 	return conditionalOperators[dialog.Operator].label + " " + value + " · " + colorName(dialog.FillRGB)
+}
+
+func (dialog *conditionalDialogState) previewView() string {
+	if dialog.Mode == conditionalColorScale {
+		colors := []string{dialog.Scale.MinRGB}
+		if dialog.ThreeColor {
+			colors = append(colors, dialog.Scale.MidRGB)
+		}
+		colors = append(colors, dialog.Scale.MaxRGB)
+		var preview strings.Builder
+		for index, rgb := range colors {
+			if index > 0 {
+				preview.WriteByte(' ')
+			}
+			if color, err := ParseRGBHex("#" + strings.TrimPrefix(rgb, "#")); err == nil {
+				preview.WriteString(lipgloss.NewStyle().Background(TerminalColor(color, supportsTrueColor())).Render("   "))
+			} else {
+				preview.WriteString("   ")
+			}
+		}
+		return "Preview: " + preview.String() + " " + dialog.Preview()
+	}
+	style := lipgloss.NewStyle().Padding(0, 1)
+	if dialog.FillRGB != "" {
+		if color, err := ParseRGBHex("#" + strings.TrimPrefix(dialog.FillRGB, "#")); err == nil {
+			style = style.Background(TerminalColor(color, supportsTrueColor()))
+		}
+	}
+	if dialog.FontRGB != "" {
+		if color, err := ParseRGBHex("#" + strings.TrimPrefix(dialog.FontRGB, "#")); err == nil {
+			style = style.Foreground(TerminalColor(color, supportsTrueColor()))
+		}
+	}
+	return "Preview: " + style.Render(dialog.Preview())
 }
 
 func colorName(rgb string) string {

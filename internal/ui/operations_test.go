@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"omasheet/internal/workbook"
 )
 
@@ -132,7 +134,7 @@ func TestConditionalDialogAddsMultipleRules(t *testing.T) {
 		t.Fatal("Add another rule mutated workbook before Done")
 	}
 	draftConditionalRule(&model, "3", true)
-	pressDialogTab(&model, 5)
+	pressDialogTab(&model, 6)
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	rules := model.session.Workbook.Sheets[0].ConditionalRules
 	if len(rules) != 2 || rules[0].Operator != workbook.GreaterThan || rules[1].Operator != workbook.LessThan || rules[1].Value != "3" {
@@ -155,7 +157,7 @@ func TestConditionalDialogRejectsInvalidRangeWithoutMutation(t *testing.T) {
 	model.ConditionalDialog.RangeInput.SetValue("A0:A5")
 	model.ConditionalDialog.ValueInput.SetValue("5")
 	model.ConditionalDialog.FillRGB = "CD0000"
-	model.ConditionalDialog.Focus = 7
+	model.ConditionalDialog.Focus = model.ConditionalDialog.doneFocus()
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !model.ConditionalDialog.Open || len(model.session.Workbook.Sheets[0].ConditionalRules) != 0 || model.ConditionalDialog.Error == "" {
 		t.Fatalf("invalid range outcome: open=%t rules=%#v error=%q", model.ConditionalDialog.Open, model.session.Workbook.Sheets[0].ConditionalRules, model.ConditionalDialog.Error)
@@ -211,20 +213,34 @@ func TestConditionalDialogSupportsTwoAndThreeColorScales(t *testing.T) {
 			model.runCommand("conditional-format")
 			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			model.Update(tea.KeyMsg{Type: tea.KeyRight})
+			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(test.selection)})
+			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			for _, expected := range []string{"Color scale", test.selection + "-color"} {
 				if !strings.Contains(model.View(), expected) {
 					t.Fatalf("scale tab missing %q: %s", expected, model.View())
 				}
 			}
-			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			pressDialogTab(&model, 4)
+			pressDialogTab(&model, model.ConditionalDialog.doneFocus()-model.ConditionalDialog.Focus)
 			model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			rules := model.session.Workbook.Sheets[0].ConditionalRules
 			if model.ConditionalDialog.Open || len(rules) != 1 || rules[0].ColorScale == nil || rules[0].ColorScale.MidRGB != test.wantMid {
 				t.Fatalf("scale tab rule = %#v open=%t", rules, model.ConditionalDialog.Open)
 			}
 		})
+	}
+}
+func TestConditionalDialogTwoColorScaleSkipsHiddenMidpoint(t *testing.T) {
+	dialog := newConditionalDialog("A1")
+	dialog.Mode = conditionalColorScale
+	dialog.setThreeColor(false)
+
+	if got := dialog.focusCount(); got != 8 {
+		t.Fatalf("two-color scale focus count = %d, want 8 visible controls", got)
+	}
+	dialog.Focus = 4
+	if action := dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter}); action != "color" || dialog.ColorField != "max" {
+		t.Fatalf("two-color scale maximum focus opened %q for %q", action, dialog.ColorField)
 	}
 }
 
@@ -777,5 +793,97 @@ func TestCSVFeatureNoticeExpiryDoesNotDismissNewerNotice(t *testing.T) {
 	model.Update(csvNoticeExpiredMsg{generation: newerGeneration})
 	if view := ansi.Strip(model.View()); strings.Contains(view, "CSV can't keep workbook features") {
 		t.Fatalf("current expiry did not dismiss its notice: %q", view)
+	}
+}
+
+func TestConditionalDialogTabAndShiftTabVisitEveryControl(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		mode int
+	}{
+		{name: "single color", mode: conditionalSingleColor},
+		{name: "color scale", mode: conditionalColorScale},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dialog := newConditionalDialog("A1")
+			dialog.Mode = testCase.mode
+			baseFocusCount := dialog.focusCount()
+			dialog.ValueInput.SetValue("5")
+			dialog.FillRGB = "CD0000"
+			dialog.Focus = dialog.addFocus()
+			dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+			if len(dialog.Rules) != 1 {
+				t.Fatalf("keyboard Add rule created %d drafts, want 1", len(dialog.Rules))
+			}
+			if got := dialog.focusCount(); got != baseFocusCount+1 {
+				t.Fatalf("focus count with removable draft = %d, want %d", got, baseFocusCount+1)
+			}
+
+			count := dialog.focusCount()
+			dialog.Focus = 0
+			seen := make(map[int]bool, count)
+			for range count {
+				if seen[dialog.Focus] {
+					t.Fatalf("Tab revisited focus %d before covering all controls", dialog.Focus)
+				}
+				seen[dialog.Focus] = true
+				dialog.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
+			}
+			if dialog.Focus != 0 || len(seen) != count {
+				t.Fatalf("Tab traversal ended at %d after visiting %d of %d controls", dialog.Focus, len(seen), count)
+			}
+			for range count {
+				before := dialog.Focus
+				dialog.HandleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+				want := (before - 1 + count) % count
+				if dialog.Focus != want {
+					t.Fatalf("Shift+Tab moved from %d to %d, want %d", before, dialog.Focus, want)
+				}
+			}
+
+			dialog.Focus = dialog.focusCount() - 3
+			dialog.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+			if len(dialog.Rules) != 0 {
+				t.Fatalf("keyboard Remove last rule left drafts %#v", dialog.Rules)
+			}
+		})
+	}
+}
+
+func TestConditionalDialogKeyboardOpensColorPickerAndCompletesRule(t *testing.T) {
+	model := newConditionalModel(t, workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1}})
+	model.runCommand("conditional-format")
+	pressDialogTab(&model, 4)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.ColorPicker.Open || model.ConditionalDialog.ColorField != "fill" {
+		t.Fatalf("Enter on Fill color did not open the color picker: picker=%t field=%q", model.ColorPicker.Open, model.ConditionalDialog.ColorField)
+	}
+	chooseThemeRed(&model)
+	model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	pressDialogTab(&model, 4)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	rules := model.session.Workbook.Sheets[0].ConditionalRules
+	if model.ConditionalDialog.Open || len(rules) != 1 || rules[0].Value != "5" || rules[0].FillRGB != "CD0000" {
+		t.Fatalf("keyboard rule completion: dialogOpen=%t rules=%#v", model.ConditionalDialog.Open, rules)
+	}
+}
+
+func TestConditionalDialogShowsVisibleFocusAndGroupedSections(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	dialog := newConditionalDialog("A1")
+	dialog.Focus = 4
+	view := dialog.View(80, 24)
+	plain := ansi.Strip(view)
+	for _, heading := range []string{"Apply to range", "Rule type and criteria", "Formatting style", "Current draft rules"} {
+		if !strings.Contains(plain, heading) {
+			t.Errorf("dialog is missing grouped section %q: %q", heading, plain)
+		}
+	}
+	focusedControl := lipgloss.NewStyle().Reverse(true).Bold(true).Render("Fill color: choose color   click to choose")
+	if !strings.Contains(view, focusedControl) {
+		t.Fatalf("focused Fill color control has no visible emphasis: %q", view)
 	}
 }
