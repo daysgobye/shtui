@@ -297,17 +297,196 @@ func TestOpenPickerFitsSmallTerminal(t *testing.T) {
 	}
 }
 
-func TestSaveAsPickerKeepsCSVLossWarning(t *testing.T) {
-	session := &workbook.Session{
-		Format: workbook.CSV,
-		Workbook: &workbook.Workbook{
-			Format: workbook.CSV,
-			Sheets: []workbook.Sheet{{Name: "Sheet1", Cells: map[workbook.Coord]workbook.Cell{{Row: 0, Col: 0}: {Input: "x", Style: workbook.CellStyle{FillRGB: "FF0000"}}}}},
-		},
+func TestCSVSaveChoiceOpensAsOverlay(t *testing.T) {
+	controller := newCSVSaveController(t, filepath.Join(t.TempDir(), "book.csv"))
+	openCSVSaveChoice(t, controller)
+	view := strings.Split(ansi.Strip(controller.View()), "\n")
+	titleRow := -1
+	for row, line := range view {
+		if strings.Contains(line, "Save workbook") {
+			titleRow = row
+			break
+		}
 	}
+	if titleRow < 5 || titleRow > 18 {
+		t.Fatalf("save dialog title row = %d, want a centered overlay in the 24-row view: %q", titleRow, view)
+	}
+	if !strings.Contains(strings.Join(view, "\n"), "active s") {
+		t.Fatalf("workbook content beneath the centered dialog is not visible: %q", view)
+	}
+	if !strings.Contains(strings.Join(view, "\n"), "Save as XLSX") || !strings.Contains(strings.Join(view, "\n"), "Cancel") {
+		t.Fatalf("save choices are missing from overlay: %q", view)
+	}
+}
+
+func TestCSVSaveChoiceKeyboardActions(t *testing.T) {
+	t.Run("CSV", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "book.csv")
+		controller := newCSVSaveController(t, path)
+		openCSVSaveChoice(t, controller)
+		_, command := controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+		if command == nil || saveDialogVisible(controller) {
+			t.Fatalf("CSV shortcut: command=%t dialogVisible=%t", command != nil, saveDialogVisible(controller))
+		}
+		controller.Update(command())
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("CSV choice did not save to the current path: %v", err)
+		}
+	})
+	t.Run("XLSX", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "book.csv")
+		controller := newCSVSaveController(t, path)
+		openCSVSaveChoice(t, controller)
+		_, command := controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+		if command == nil || !controller.pickerOpen || controller.pickerMode != "save-xlsx" || controller.saveName.Value() != "book.xlsx" {
+			t.Fatalf("XLSX shortcut: command=%t picker=%t mode=%q name=%q", command != nil, controller.pickerOpen, controller.pickerMode, controller.saveName.Value())
+		}
+	})
+	t.Run("Escape", func(t *testing.T) {
+		controller := newCSVSaveController(t, filepath.Join(t.TempDir(), "book.csv"))
+		session := controller.session
+		pathBefore := session.Path
+		openCSVSaveChoice(t, controller)
+		controller.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		if saveDialogVisible(controller) || controller.session != session || session.Format != workbook.CSV || session.Path != pathBefore {
+			t.Fatalf("Escape changed save state: dialogVisible=%t format=%s path=%q", saveDialogVisible(controller), session.Format, session.Path)
+		}
+	})
+}
+
+func TestCSVSaveChoiceMouseActions(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		label string
+	}{
+		{name: "CSV", label: "Save as CSV"},
+		{name: "XLSX", label: "Save as XLSX"},
+		{name: "Cancel", label: "Cancel"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			controller := newCSVSaveController(t, filepath.Join(t.TempDir(), "book.csv"))
+			openCSVSaveChoice(t, controller)
+			x, y := controllerActionPoint(t, controller.View(), testCase.label)
+			_, command := controller.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+			if saveDialogVisible(controller) {
+				t.Fatalf("clicking %q left the dialog visible", testCase.label)
+			}
+			switch testCase.name {
+			case "CSV":
+				if command == nil || controller.session.Format != workbook.CSV {
+					t.Fatalf("CSV click: command=%t format=%s", command != nil, controller.session.Format)
+				}
+			case "XLSX":
+				if command == nil || !controller.pickerOpen || controller.pickerMode != "save-xlsx" {
+					t.Fatalf("XLSX click: command=%t picker=%t mode=%q", command != nil, controller.pickerOpen, controller.pickerMode)
+				}
+			case "Cancel":
+				if command != nil || controller.session.Format != workbook.CSV {
+					t.Fatalf("Cancel click: command=%t format=%s", command != nil, controller.session.Format)
+				}
+			}
+		})
+	}
+}
+
+func TestCSVSaveChoiceCSVExportsActiveSheetAndKeepsSession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.csv")
+	controller := newCSVSaveController(t, path)
+	session := controller.session
+	activeStyle := workbook.CellStyle{FillRGB: "123456", Bold: true}
+	if err := workbook.ApplyStyle(session, "Data", workbook.CellRange{}, activeStyle); err != nil {
+		t.Fatalf("ApplyStyle: %v", err)
+	}
+	openCSVSaveChoice(t, controller)
+	_, command := controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if command == nil {
+		t.Fatal("CSV choice did not return a save command")
+	}
+	controller.Update(command())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read CSV export: %v", err)
+	}
+	if !strings.Contains(string(data), "active sheet") || strings.Contains(string(data), "first sheet") {
+		t.Fatalf("CSV export did not contain only the active sheet: %q", data)
+	}
+	if controller.session != session || session.Format != workbook.CSV || len(session.Workbook.Sheets) != 2 {
+		t.Fatalf("CSV export changed the live workbook: format=%s sheets=%d", session.Format, len(session.Workbook.Sheets))
+	}
+	if got := session.Workbook.Sheets[1].Cells[workbook.Coord{}].Style; got != activeStyle {
+		t.Fatalf("CSV export discarded live formatting: %#v", got)
+	}
+}
+
+func TestCSVSaveChoiceXLSXPickerUsesXLSXName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.csv")
+	controller := newCSVSaveController(t, path)
+	openCSVSaveChoice(t, controller)
+	_, pickerCommand := controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if pickerCommand == nil {
+		t.Fatal("XLSX choice did not open the save picker")
+	}
+	controller.saveName.SetValue("converted.xlsx")
+	_, saveCommand := controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if saveCommand == nil {
+		t.Fatal("choosing an XLSX path did not start conversion")
+	}
+	controller.Update(saveCommand())
+	convertedPath := filepath.Join(filepath.Dir(path), "converted.xlsx")
+	if controller.session.Format != workbook.XLSX || controller.session.Path != convertedPath || controller.pickerOpen || saveDialogVisible(controller) {
+		t.Fatalf("XLSX save result: format=%s path=%q picker=%t dialogVisible=%t", controller.session.Format, controller.session.Path, controller.pickerOpen, saveDialogVisible(controller))
+	}
+	if _, err := os.Stat(convertedPath); err != nil {
+		t.Fatalf("converted XLSX missing: %v", err)
+	}
+}
+
+func newCSVSaveController(t *testing.T, path string) *Controller {
+	t.Helper()
+	session, err := workbook.NewWorkbook(workbook.CSV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	if path != "" {
+		session.Path = path
+		session.Workbook.Path = path
+	}
+	if err := workbook.SetCell(session, workbook.CellAddress{Sheet: "Sheet1"}, "first sheet"); err != nil {
+		t.Fatalf("SetCell first sheet: %v", err)
+	}
+	if err := workbook.ApplyStyle(session, "Sheet1", workbook.CellRange{}, workbook.CellStyle{FillRGB: "FF0000"}); err != nil {
+		t.Fatalf("ApplyStyle: %v", err)
+	}
+	if err := workbook.AddSheet(session, "Data"); err != nil {
+		t.Fatalf("AddSheet: %v", err)
+	}
+	if err := workbook.SetCell(session, workbook.CellAddress{Sheet: "Data"}, "active sheet"); err != nil {
+		t.Fatalf("SetCell active sheet: %v", err)
+	}
+	session.Workbook.ActiveSheet = 1
 	controller := NewController("")
 	controller.session = session
+	controller.path = path
 	controller.view = ui.NewModel(session)
+	controller.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	return controller
+}
+
+func openCSVSaveChoice(t *testing.T, controller *Controller) {
+	t.Helper()
+	controller.Update(teaKeyCtrlS())
+	if !saveDialogVisible(controller) {
+		t.Fatalf("Save did not open CSV choices: %q", controller.View())
+	}
+}
+
+func saveDialogVisible(controller *Controller) bool {
+	return strings.Contains(ansi.Strip(controller.View()), "Save workbook")
+}
+
+func TestSaveAsPickerKeepsCSVLossWarning(t *testing.T) {
+	controller := newCSVSaveController(t, "")
 	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("save as")})
 	_, initPicker := controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -317,11 +496,11 @@ func TestSaveAsPickerKeepsCSVLossWarning(t *testing.T) {
 	controller.Update(initPicker())
 	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("export.csv")})
 	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !controller.confirmCSVLoss || filepath.Base(controller.pendingSavePath) != "export.csv" {
-		t.Fatalf("Save As bypassed the CSV loss warning: warning=%t path=%q", controller.confirmCSVLoss, controller.pendingSavePath)
+	if !saveDialogVisible(controller) || filepath.Base(controller.pendingSavePath) != "export.csv" {
+		t.Fatalf("Save As did not open CSV choices: dialogVisible=%t path=%q", saveDialogVisible(controller), controller.pendingSavePath)
 	}
-	if !strings.Contains(controller.View(), "formatting") {
-		t.Fatalf("CSV loss warning is not visible: %q", controller.View())
+	if !strings.Contains(controller.View(), "Save as XLSX") || !strings.Contains(controller.View(), "formatting") {
+		t.Fatalf("CSV save choices are not visible: %q", controller.View())
 	}
 }
 

@@ -40,7 +40,7 @@ type Controller struct {
 	pickerFocused   bool
 	saveName        textinput.Model
 	keys            ui.KeyMap
-	confirmCSVLoss  bool
+	csvSaveDialog   csvSaveDialog
 	pendingSavePath string
 	status          string
 	width           int
@@ -151,6 +151,7 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return controller, nil
 	case saveCompleteMsg:
 		controller.saving = false
+		controller.pendingSavePath = ""
 		if message.err != nil {
 			controller.status = fmt.Sprintf("Save %q failed: %v", message.path, message.err)
 		} else {
@@ -162,8 +163,8 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if controller.loading || controller.saving {
 			return controller, nil
 		}
-		if controller.confirmCSVLoss {
-			return controller, controller.handleCSVConfirmation(message)
+		if controller.csvSaveDialog.open {
+			return controller, controller.handleCSVSaveChoice(controller.csvSaveDialog.handleKey(message))
 		}
 		if controller.keys.Matches(message, controller.keys.OpenFile) {
 			return controller, controller.beginPicker("open")
@@ -187,6 +188,9 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		action := controller.view.TakeCommand()
 		return controller, controller.handleAction(action, command)
 	case tea.MouseMsg:
+		if controller.csvSaveDialog.open {
+			return controller, controller.handleCSVSaveChoice(controller.csvSaveDialog.handleMouse(message, controller.width, controller.height))
+		}
 		if controller.loading && controller.session == nil {
 			return controller, nil
 		}
@@ -210,8 +214,6 @@ func (controller *Controller) View() string {
 	content := controller.view.View()
 	if controller.session != nil {
 		switch {
-		case controller.confirmCSVLoss:
-			content += "\nCSV warning: " + strings.Join(controller.csvLossWarnings(), "; ") + ". Press Enter or Y to continue, Esc to cancel."
 		case controller.loading:
 			content += "\nLoading " + controller.loadingPath + "…"
 		case controller.saving:
@@ -224,6 +226,9 @@ func (controller *Controller) View() string {
 	}
 	if controller.pickerOpen {
 		return ui.ComposeOverlay(content, controller.pickerView(), controller.width, controller.height)
+	}
+	if controller.csvSaveDialog.open {
+		return ui.ComposeOverlay(content, controller.csvSaveDialog.View(controller.width, controller.height), controller.width, controller.height)
 	}
 	if controller.session == nil && controller.view.Palette.Open {
 		return ui.ComposeOverlay(content, controller.view.Palette.View(controller.width), controller.width, controller.height)
@@ -268,9 +273,7 @@ func (controller *Controller) requestSave() tea.Cmd {
 		return nil
 	}
 	if warnings := controller.csvLossWarnings(); len(warnings) > 0 {
-		controller.pendingSavePath = controller.session.Path
-		controller.confirmCSVLoss = true
-		controller.status = ""
+		controller.openCSVSaveDialog(controller.session.Path)
 		return nil
 	}
 	if controller.session.Path == "" {
@@ -289,10 +292,14 @@ func (controller *Controller) beginPicker(mode string) tea.Cmd {
 	controller.picker.DirAllowed = true
 	controller.picker.FileAllowed = mode == "open"
 	controller.picker.SetHeight(max(controller.height-8, 1))
-	if mode == "save" && controller.path != "" {
-		controller.picker.CurrentDirectory = filepath.Dir(controller.path)
-	}
-	if mode == "save" {
+	if isSavePicker(mode) {
+		sourcePath := controller.pendingSavePath
+		if sourcePath == "" {
+			sourcePath = controller.path
+		}
+		if sourcePath != "" {
+			controller.picker.CurrentDirectory = filepath.Dir(sourcePath)
+		}
 		controller.saveName.Reset()
 		focusCommand := controller.saveName.Focus()
 		return tea.Batch(controller.picker.Init(), focusCommand)
@@ -306,11 +313,12 @@ func (controller *Controller) updatePicker(message tea.Msg) tea.Cmd {
 		if keyMessage.Type == tea.KeyEsc {
 			controller.pickerOpen = false
 			controller.pickerFocused = false
+			controller.pendingSavePath = ""
 			controller.saveName.Blur()
 			controller.status = ""
 			return nil
 		}
-		if controller.pickerMode == "save" && !controller.pickerFocused {
+		if isSavePicker(controller.pickerMode) && !controller.pickerFocused {
 			switch keyMessage.Type {
 			case tea.KeyTab:
 				controller.pickerFocused = true
@@ -323,16 +331,24 @@ func (controller *Controller) updatePicker(message tea.Msg) tea.Cmd {
 					return nil
 				}
 				path := filepath.Join(controller.picker.CurrentDirectory, name)
+				mode := controller.pickerMode
 				controller.pickerOpen = false
 				controller.saveName.Blur()
-				return controller.prepareSave(path)
+				switch mode {
+				case "save-csv":
+					return controller.startSave(withSaveExtension(path, ".csv"))
+				case "save-xlsx":
+					return controller.startSave(withSaveExtension(path, ".xlsx"))
+				default:
+					return controller.prepareSave(path)
+				}
 			default:
 				var command tea.Cmd
 				controller.saveName, command = controller.saveName.Update(keyMessage)
 				return command
 			}
 		}
-		if controller.pickerMode == "save" && controller.pickerFocused && keyMessage.Type == tea.KeyTab {
+		if isSavePicker(controller.pickerMode) && controller.pickerFocused && keyMessage.Type == tea.KeyTab {
 			controller.pickerFocused = false
 			return controller.saveName.Focus()
 		}
@@ -356,12 +372,21 @@ func (controller *Controller) updatePicker(message tea.Msg) tea.Cmd {
 	return command
 }
 
+func isSavePicker(mode string) bool {
+	return mode == "save" || mode == "save-csv" || mode == "save-xlsx"
+}
+
 func (controller *Controller) pickerView() string {
 	title := "Open workbook"
 	controls := "↑/↓ navigate · Enter open/select · Esc close"
 	rows := []string{title, "Esc close · " + controller.picker.CurrentDirectory, ""}
-	if controller.pickerMode == "save" {
+	if isSavePicker(controller.pickerMode) {
 		title = "Save as"
+		if controller.pickerMode == "save-csv" {
+			title = "Save as CSV"
+		} else if controller.pickerMode == "save-xlsx" {
+			title = "Save as XLSX"
+		}
 		controls = "Tab browse folders · Enter save · Esc cancel"
 		rows[0] = title
 		rows = append(rows, controller.saveName.View(), "")
@@ -399,9 +424,7 @@ func (controller *Controller) prepareSave(path string) tea.Cmd {
 		return nil
 	}
 	if warnings := controller.csvLossWarnings(); len(warnings) > 0 {
-		controller.pendingSavePath = path
-		controller.confirmCSVLoss = true
-		controller.status = ""
+		controller.openCSVSaveDialog(path)
 		return nil
 	}
 	return controller.startSave(path)
@@ -414,34 +437,67 @@ func (controller *Controller) startSave(path string) tea.Cmd {
 	return controller.saveCmd(path)
 }
 
-func (controller *Controller) handleCSVConfirmation(message tea.KeyMsg) tea.Cmd {
-	switch message.Type {
-	case tea.KeyEsc:
-		controller.confirmCSVLoss = false
+func (controller *Controller) openCSVSaveDialog(path string) {
+	controller.pendingSavePath = path
+	controller.csvSaveDialog.openWithWarnings(controller.csvLossWarnings())
+	controller.status = ""
+}
+
+func (controller *Controller) handleCSVSaveChoice(action csvSaveAction) tea.Cmd {
+	if action == "" {
+		return nil
+	}
+	path := controller.pendingSavePath
+	if path == "" && controller.session != nil {
+		path = controller.session.Path
+	}
+	controller.csvSaveDialog.open = false
+	controller.csvSaveDialog.warnings = nil
+	switch action {
+	case csvSaveAsCSV:
+		controller.pendingSavePath = ""
+		if path == "" {
+			return controller.beginFormatSavePicker("csv", "")
+		}
+		return controller.startSave(withSaveExtension(path, ".csv"))
+	case csvSaveAsXLSX:
+		command := controller.beginFormatSavePicker("xlsx", path)
+		controller.pendingSavePath = ""
+		return command
+	case csvSaveCancel:
 		controller.pendingSavePath = ""
 		controller.status = "Save cancelled"
-	case tea.KeyEnter:
-		return controller.confirmCSVSave()
-	case tea.KeyRunes:
-		if strings.EqualFold(string(message.Runes), "y") {
-			return controller.confirmCSVSave()
-		}
-		if strings.EqualFold(string(message.Runes), "n") {
-			controller.confirmCSVLoss = false
-			controller.pendingSavePath = ""
-		}
 	}
 	return nil
 }
 
-func (controller *Controller) confirmCSVSave() tea.Cmd {
-	controller.confirmCSVLoss = false
-	path := controller.pendingSavePath
-	controller.pendingSavePath = ""
-	if path == "" {
-		return controller.beginPicker("save")
+func (controller *Controller) beginFormatSavePicker(format string, sourcePath string) tea.Cmd {
+	mode := "save-" + format
+	if sourcePath != "" {
+		controller.pendingSavePath = sourcePath
 	}
-	return controller.startSave(path)
+	command := controller.beginPicker(mode)
+	controller.pendingSavePath = ""
+	controller.saveName.SetValue(defaultSaveName(sourcePath, "."+format))
+	return command
+}
+
+func withSaveExtension(path, extension string) string {
+	if strings.EqualFold(filepath.Ext(path), extension) {
+		return path
+	}
+	return strings.TrimSuffix(path, filepath.Ext(path)) + extension
+}
+
+func defaultSaveName(sourcePath, extension string) string {
+	name := "workbook"
+	if sourcePath != "" {
+		name = strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = "workbook"
+		}
+	}
+	return name + extension
 }
 
 func (controller *Controller) csvLossWarnings() []string {
