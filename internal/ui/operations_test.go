@@ -391,43 +391,42 @@ func TestBorderMenuAppliesPresetToSelectedRange(t *testing.T) {
 	}
 }
 
-func TestBorderToolbarOpensPresetMenu(t *testing.T) {
+func TestToolbarOverflowRetainsBorderCommands(t *testing.T) {
 	session, err := workbook.NewWorkbook(workbook.CSV)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
 	model := NewModel(session)
-	borderX := -1
-	for x := range 300 {
-		if toolbarActionAt(x) == "border-menu" {
-			borderX = x
-			break
-		}
+	model.width = 80
+	line := strings.Split(ansi.Strip(model.View()), "\n")[0]
+	moreIndex := strings.Index(line, "More")
+	if moreIndex < 0 {
+		t.Fatalf("toolbar has no More action: %q", line)
 	}
-	if borderX < 0 {
-		t.Fatal("toolbar has no Borders action")
-	}
-	model.handleMouse(tea.MouseMsg(tea.MouseEvent{X: borderX, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
-	if !model.Palette.Open || model.Palette.Query != "border" {
-		t.Fatalf("Borders action did not open filtered presets: open=%t query=%q", model.Palette.Open, model.Palette.Query)
+	model.handleMouse(tea.MouseMsg(tea.MouseEvent{
+		X: ansi.StringWidth(line[:moreIndex]), Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+	if !model.Palette.Open {
+		t.Fatal("More did not open the command palette")
 	}
 	for _, id := range []string{"border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right", "border-none"} {
 		found := false
-		for _, item := range model.Palette.list.VisibleItems() {
+		for _, item := range model.Palette.list.Items() {
 			if item, ok := item.(paletteItem); ok && item.command.ID == id {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("Borders menu does not show %q", id)
+			t.Errorf("overflow palette does not retain %q", id)
 		}
 	}
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("all borders")})
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	borders := session.Workbook.Sheets[0].Cells[workbook.Coord{}].Style.Borders
-	if !strings.HasPrefix(model.lastCommand, "border-") || borders == (workbook.BorderSet{}) {
-		t.Fatalf("choosing a border preset left command=%q borders=%#v", model.lastCommand, borders)
+	if model.lastCommand != "border-all" || borders == (workbook.BorderSet{}) {
+		t.Fatalf("selecting the overflow border command left command=%q borders=%#v", model.lastCommand, borders)
 	}
 }
 

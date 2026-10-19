@@ -115,7 +115,11 @@ func (screen *homeScreen) layout(width, height int) homeScreenLayout {
 		Padding(0, 1).
 		Width(listWidth).
 		Render(listView)
-	wordmark := lipgloss.NewStyle().Foreground(ANSIColor(6)).Bold(true).Render("shtui")
+	wordmarkText := "SHTUI"
+	if !compact {
+		wordmarkText = largeSHTUIWordmark()
+	}
+	wordmark := lipgloss.NewStyle().Foreground(ANSIColor(6)).Bold(true).Render(wordmarkText)
 	tagline := lipgloss.NewStyle().Foreground(ANSIColor(8)).Render("A calmer way to work with spreadsheets")
 	wideHints := lipgloss.NewStyle().Foreground(ANSIColor(8)).Render("↑/↓ select  ·  Enter choose  ·  Ctrl+P commands  ·  Ctrl+C quit")
 	compactHints := lipgloss.NewStyle().Foreground(ANSIColor(8)).Render("↑/↓ select · Enter choose\nCtrl+P commands · Ctrl+C quit")
@@ -168,4 +172,14 @@ func (screen *homeScreen) selectedAction() string {
 		return ""
 	}
 	return item.action
+}
+
+func largeSHTUIWordmark() string {
+	return strings.Join([]string{
+		"████  █  █ ████ █  █ ████",
+		"█     █  █  ██  █  █  ██ ",
+		"████  ████  ██  █  █  ██ ",
+		"   █  █  █  ██  █  █  ██ ",
+		"████  █  █  ██  ████ ████",
+	}, "\n")
 }

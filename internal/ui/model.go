@@ -448,7 +448,7 @@ func (model *AppModel) handleMouse(message tea.MouseMsg) {
 		return
 	}
 	if model.toolbarVisible && event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == 0 {
-		model.runCommand(toolbarActionAt(event.X))
+		model.runCommand(toolbarActionAtWidth(event.X, model.width))
 		return
 	}
 	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft && event.Y == model.sheetTabsY() {
@@ -483,6 +483,8 @@ func (model *AppModel) runCommand(command string) {
 		model.toolbarVisible = true
 	case "view":
 		model.ToggleToolbar()
+	case "more":
+		model.Palette.Show()
 	case "file", "edit", "data", "format":
 		model.Palette.Show()
 	case "undo":

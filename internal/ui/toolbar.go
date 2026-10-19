@@ -11,12 +11,22 @@ type toolbarItem struct {
 	Label string
 }
 
+type toolbarItemPlacement struct {
+	action      string
+	label       string
+	start       int
+	end         int
+	groupBefore bool
+}
+
 var toolbarItems = []toolbarItem{
 	{ID: "file", Label: "File"},
 	{ID: "edit", Label: "Edit"},
 	{ID: "view", Label: "View"},
 	{ID: "data", Label: "Data"},
 	{ID: "format", Label: "Format"},
+	{ID: "conditional-format", Label: "Conditional"},
+	{ID: "insert-function", Label: "ƒx"},
 	{ID: "undo", Label: "Undo"},
 	{ID: "redo", Label: "Redo"},
 	{ID: "insert-row", Label: "+ Row"},
@@ -39,15 +49,15 @@ func (model *AppModel) toolbarView() string {
 		return ""
 	}
 	var output strings.Builder
-	for index, item := range toolbarItems {
+	for index, item := range layoutToolbar(model.width) {
 		if index > 0 {
-			if toolbarGroupBoundary(index) {
+			if item.groupBefore {
 				output.WriteString(lipgloss.NewStyle().Foreground(ANSIColor(8)).Render("  │  "))
 			} else {
 				output.WriteString("  ")
 			}
 		}
-		output.WriteString(toolbarItemStyle().Render(item.Label))
+		output.WriteString(toolbarItemStyle().Render(item.label))
 	}
 	return output.String()
 }
@@ -58,27 +68,72 @@ func toolbarItemStyle() lipgloss.Style {
 
 func toolbarGroupBoundary(index int) bool {
 	switch index {
-	case 3, 5, 7, 9, 12:
+	case 3, 7, 9, 11, 14:
 		return true
 	default:
 		return false
 	}
 }
 
-func toolbarActionAt(x int) string {
+func toolbarGapWidth(groupBefore bool) int {
+	if groupBefore {
+		return lipgloss.Width("  │  ")
+	}
+	return 2
+}
+
+func layoutToolbar(width int) []toolbarItemPlacement {
+	if width <= 0 {
+		return nil
+	}
+	placements := make([]toolbarItemPlacement, 0, len(toolbarItems)+1)
 	position := 0
+	moreWidth := lipgloss.Width(toolbarItemStyle().Render("More"))
 	for index, item := range toolbarItems {
-		width := lipgloss.Width(toolbarItemStyle().Render(item.Label))
-		if x >= position && x < position+width {
-			return item.ID
+		groupBefore := index > 0 && toolbarGroupBoundary(index)
+		start := position
+		if len(placements) > 0 {
+			start += toolbarGapWidth(groupBefore)
 		}
-		position += width
+		end := start + lipgloss.Width(toolbarItemStyle().Render(item.Label))
+		requiredEnd := end
 		if index < len(toolbarItems)-1 {
-			if toolbarGroupBoundary(index + 1) {
-				position += lipgloss.Width("  │  ")
-			} else {
-				position += 2
+			requiredEnd += toolbarGapWidth(true) + moreWidth
+		}
+		if requiredEnd > width {
+			moreStart := position
+			if len(placements) > 0 {
+				moreStart += toolbarGapWidth(true)
 			}
+			for len(placements) > 0 && moreStart+moreWidth > width {
+				placements = placements[:len(placements)-1]
+				position = 0
+				if len(placements) > 0 {
+					position = placements[len(placements)-1].end
+					moreStart = position + toolbarGapWidth(true)
+				} else {
+					moreStart = 0
+				}
+			}
+			if moreStart+moreWidth <= width {
+				placements = append(placements, toolbarItemPlacement{
+					action: "more", label: "More", start: moreStart, end: moreStart + moreWidth, groupBefore: true,
+				})
+			}
+			break
+		}
+		placements = append(placements, toolbarItemPlacement{
+			action: item.ID, label: item.Label, start: start, end: end, groupBefore: groupBefore,
+		})
+		position = end
+	}
+	return placements
+}
+
+func toolbarActionAtWidth(x, width int) string {
+	for _, item := range layoutToolbar(width) {
+		if x >= item.start && x < item.end {
+			return item.action
 		}
 	}
 	return ""

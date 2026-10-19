@@ -10,14 +10,11 @@ import (
 	"omasheet/internal/workbook"
 )
 
-func TestWelcomeScreenUsesShtuiBrandAndFitsViewport(t *testing.T) {
+func TestWelcomeWordmarkIsProminentAndCompact(t *testing.T) {
 	model := NewModel(nil)
 	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 30, Height: 10}} {
 		model.Update(size)
 		view := strings.TrimRight(ansi.Strip(model.View()), "\n")
-		if !strings.Contains(strings.ToLower(view), "shtui") {
-			t.Fatalf("welcome screen lacks Shtui brand at %dx%d: %q", size.Width, size.Height, view)
-		}
 		for _, action := range []string{"Open workbook", "New CSV", "New XLSX"} {
 			if !strings.Contains(view, action) {
 				t.Errorf("welcome screen lacks %q at %dx%d: %q", action, size.Width, size.Height, view)
@@ -25,6 +22,12 @@ func TestWelcomeScreenUsesShtuiBrandAndFitsViewport(t *testing.T) {
 		}
 		if !strings.Contains(view, "Ctrl+P") || !strings.Contains(view, "Enter") {
 			t.Errorf("welcome screen lacks keyboard hints at %dx%d: %q", size.Width, size.Height, view)
+		}
+		if size.Width >= 42 && strings.Count(view, "█") < 40 {
+			t.Errorf("normal welcome screen lacks the prominent SHTUI wordmark at %dx%d: %q", size.Width, size.Height, view)
+		}
+		if size.Width < 42 && !strings.Contains(view, "SHTUI") {
+			t.Errorf("compact welcome screen lacks the SHTUI wordmark at %dx%d: %q", size.Width, size.Height, view)
 		}
 		lines := strings.Split(view, "\n")
 		if len(lines) > size.Height {
