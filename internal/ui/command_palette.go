@@ -53,6 +53,7 @@ func newPaletteItems(keys KeyMap) []list.Item {
 		{ID: "toggle-bold", Name: "Toggle bold"},
 		{ID: "add-sheet", Name: "Add sheet"},
 		{ID: "conditional-format", Name: "Add conditional formatting"},
+		{ID: "insert-function", Name: "Insert function"},
 		{ID: "previous-sheet", Name: "Previous sheet"},
 		{ID: "next-sheet", Name: "Next sheet"},
 	}

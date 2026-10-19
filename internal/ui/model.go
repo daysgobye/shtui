@@ -2,13 +2,15 @@ package ui
 
 import (
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"omasheet/internal/workbook"
 	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"omasheet/internal/workbook"
 )
 
 type colorPickerState struct {
@@ -36,6 +38,7 @@ type AppModel struct {
 	session        *workbook.Session
 	Grid           GridViewport
 	Palette        CommandPalette
+	FunctionPicker formulaPickerState
 	keys           KeyMap
 	Theme          ThemePalette
 	ColorPicker    colorPickerState
@@ -43,7 +46,7 @@ type AppModel struct {
 	width          int
 	height         int
 	editing        bool
-	editor         string
+	editorInput    textinput.Model
 	findMode       bool
 	findQuery      string
 	themeQuery     func(uint8, time.Duration) (RGB, bool)
@@ -57,12 +60,19 @@ type AppModel struct {
 
 func NewModel(session *workbook.Session) AppModel {
 	keys := DefaultKeyMap()
+	editor := textinput.New()
+	editor.Prompt = "Edit: "
+	editor.Width = 68
+	editor.PromptStyle = lipgloss.NewStyle().Foreground(ANSIColor(6)).Bold(true)
+	editor.TextStyle = lipgloss.NewStyle().Foreground(ANSIColor(7))
+	editor.Cursor.Style = lipgloss.NewStyle().Foreground(ANSIColor(6))
 	return AppModel{
 		session:        session,
 		Grid:           NewGridViewport(),
 		Palette:        NewCommandPalette(keys),
 		Theme:          NewThemePalette(),
 		keys:           keys,
+		editorInput:    editor,
 		toolbarVisible: true,
 		width:          80,
 		height:         24,
@@ -134,6 +144,9 @@ func (model *AppModel) View() string {
 	if model.Palette.Open {
 		return ComposeOverlay(output.String(), model.Palette.View(model.width), model.width, model.height)
 	}
+	if model.FunctionPicker.Open {
+		return ComposeOverlay(output.String(), model.FunctionPicker.View(model.width), model.width, model.height)
+	}
 	return output.String()
 }
 
@@ -155,6 +168,10 @@ func (model *AppModel) handleKey(message tea.KeyMsg) {
 		}
 		return
 	}
+	if model.FunctionPicker.Open {
+		model.handleFormulaPickerKey(message)
+		return
+	}
 	if model.operation.Mode != "" {
 		model.handleOperationKey(message)
 		return
@@ -167,60 +184,87 @@ func (model *AppModel) handleKey(message tea.KeyMsg) {
 		model.handleEditKey(message)
 		return
 	}
+	if model.keys.Matches(message, model.keys.Find) {
+		model.findMode = true
+		model.findQuery = ""
+		return
+	}
+	if model.keys.Matches(message, model.keys.ToggleToolbar) {
+		model.ToggleToolbar()
+		return
+	}
 	if model.session == nil || model.session.Workbook == nil {
 		return
 	}
-	switch message.Type {
-	case tea.KeyCtrlZ:
+	switch {
+	case model.keys.Matches(message, model.keys.Undo):
 		model.setStatus(workbook.Undo(model.session))
 		model.filtersDirty = true
-	case tea.KeyCtrlY:
+	case model.keys.Matches(message, model.keys.Redo):
 		model.setStatus(workbook.Redo(model.session))
 		model.filtersDirty = true
-	case tea.KeyEnter:
-		cell := model.activeSheet().Cells[model.Grid.Selected]
-		model.editor = cell.Input
-		model.editing = true
-	case tea.KeyUp:
+	case model.keys.Matches(message, model.keys.PreviousSheet):
+		model.changeSheet(-1)
+	case model.keys.Matches(message, model.keys.NextSheet):
+		model.changeSheet(1)
+	case model.keys.Matches(message, model.keys.BeginEdit):
+		model.startEditing(model.activeSheet().Cells[model.Grid.Selected].Input)
+	case model.keys.Matches(message, model.keys.MoveUp):
 		model.moveSelection(-1, 0)
-	case tea.KeyDown:
+	case model.keys.Matches(message, model.keys.MoveDown):
 		model.moveSelection(1, 0)
-	case tea.KeyLeft:
+	case model.keys.Matches(message, model.keys.MoveLeft):
 		model.moveSelection(0, -1)
-	case tea.KeyRight:
+	case model.keys.Matches(message, model.keys.MoveRight):
 		model.moveSelection(0, 1)
-	case tea.KeyRunes:
-		if len(message.Runes) > 0 {
-			model.editor = string(message.Runes)
-			model.editing = true
-		}
+	case message.Type == tea.KeySpace:
+		model.startEditing(" ")
+	case message.Type == tea.KeyRunes && len(message.Runes) > 0:
+		model.startEditing(string(message.Runes))
 	}
 }
 
 func (model *AppModel) handleEditKey(message tea.KeyMsg) {
-	switch message.Type {
-	case tea.KeyEsc:
+	switch {
+	case model.keys.Matches(message, model.keys.CancelEdit):
 		model.editing = false
-		model.editor = ""
-	case tea.KeyEnter:
-		if model.session != nil {
-			address := workbook.CellAddress{Sheet: model.activeSheet().Name, Row: model.Grid.Selected.Row, Col: model.Grid.Selected.Col}
-			err := workbook.SetCell(model.session, address, model.editor)
-			model.setStatus(err)
-			if err == nil {
-				model.filtersDirty = true
-			}
+		model.editorInput.Blur()
+		model.editorInput.Reset()
+	case model.keys.Matches(message, model.keys.CommitDown):
+		model.commitEdit(1, 0)
+	case model.keys.Matches(message, model.keys.CommitRight):
+		model.commitEdit(0, 1)
+	default:
+		if message.Type == tea.KeySpace {
+			message.Type = tea.KeyRunes
+			message.Runes = []rune{' '}
 		}
-		model.editing = false
-		model.editor = ""
-	case tea.KeyBackspace:
-		runes := []rune(model.editor)
-		if len(runes) > 0 {
-			model.editor = string(runes[:len(runes)-1])
-		}
-	case tea.KeyRunes:
-		model.editor += string(message.Runes)
+		model.editorInput, _ = model.editorInput.Update(message)
 	}
+}
+
+func (model *AppModel) startEditing(value string) {
+	model.editorInput.SetValue(value)
+	model.editorInput.CursorEnd()
+	model.editorInput.Focus()
+	model.editing = true
+}
+
+func (model *AppModel) commitEdit(rowDelta, colDelta int) {
+	if model.session == nil || model.activeSheet() == nil {
+		return
+	}
+	address := workbook.CellAddress{Sheet: model.activeSheet().Name, Row: model.Grid.Selected.Row, Col: model.Grid.Selected.Col}
+	err := workbook.SetCell(model.session, address, model.editorInput.Value())
+	model.setStatus(err)
+	if err != nil {
+		return
+	}
+	model.filtersDirty = true
+	model.editing = false
+	model.editorInput.Blur()
+	model.editorInput.Reset()
+	model.moveSelection(rowDelta, colDelta)
 }
 
 func (model *AppModel) handleFindKey(message tea.KeyMsg) {
@@ -360,6 +404,10 @@ func (model *AppModel) runCommand(command string) {
 	case "find":
 		model.findMode = true
 		model.findQuery = ""
+	case "previous-sheet":
+		model.changeSheet(-1)
+	case "next-sheet":
+		model.changeSheet(1)
 	case "fill-color":
 		model.openColorPicker(fillColorTarget)
 	case "font-color":
@@ -370,6 +418,8 @@ func (model *AppModel) runCommand(command string) {
 		model.beginOperation("filter")
 	case "conditional-format":
 		model.beginOperation("conditional")
+	case "insert-function":
+		model.FunctionPicker = newFormulaPicker(model.selectedRangeName(), model.defaultFormulaTargetName())
 	case "border":
 		style := model.activeSheet().Cells[model.Grid.Selected].Style
 		style.Borders.Bottom = workbook.BorderStyle{Preset: "thin"}
@@ -687,6 +737,7 @@ func (model *AppModel) layout() {
 	if model.height <= 0 {
 		model.height = 24
 	}
+	model.editorInput.Width = max(model.width-16, 1)
 	originY := model.topLines()
 	gridHeight := max(model.height-originY-2, 1)
 	model.Grid.SetBounds(0, originY, model.width, gridHeight)
@@ -733,7 +784,7 @@ func (model *AppModel) formulaBar() string {
 	cell := sheet.Cells[model.Grid.Selected]
 	value := cell.Input
 	if model.editing {
-		value = model.editor
+		value = model.editorInput.Value()
 	}
 	return fmt.Sprintf("%s!%s  fx  %s", sheet.Name, columnName(model.Grid.Selected.Col)+itoa(model.Grid.Selected.Row+1), value)
 }
@@ -754,27 +805,118 @@ func (model *AppModel) sheetTabs() string {
 }
 
 func (model *AppModel) selectSheetAt(x int) {
+	if model.session == nil || model.session.Workbook == nil {
+		return
+	}
 	position := 0
 	for index, sheet := range model.session.Workbook.Sheets {
 		label := " " + sheet.Name + " "
 		width := lipgloss.Width(label)
 		if x >= position && x < position+width {
-			model.session.Workbook.ActiveSheet = index
-			model.Grid.ScrollRow = 0
-			model.Grid.ScrollCol = 0
-			model.Grid.Selected = workbook.Coord{}
-			model.Grid.Selection = workbook.CellRange{}
-			model.Grid.ColumnWidths = make(map[int]int)
+			model.activateSheet(index)
 			return
 		}
 		position += width + 2
 	}
 }
 
+func (model *AppModel) changeSheet(delta int) {
+	if model.session == nil || model.session.Workbook == nil || len(model.session.Workbook.Sheets) == 0 {
+		return
+	}
+	count := len(model.session.Workbook.Sheets)
+	index := (model.session.Workbook.ActiveSheet + delta + count) % count
+	model.activateSheet(index)
+}
+
+func (model *AppModel) activateSheet(index int) {
+	if model.session == nil || model.session.Workbook == nil || len(model.session.Workbook.Sheets) == 0 {
+		return
+	}
+	model.session.Workbook.ActiveSheet = min(max(index, 0), len(model.session.Workbook.Sheets)-1)
+	model.Grid.ScrollRow = 0
+	model.Grid.ScrollCol = 0
+	model.Grid.Selected = workbook.Coord{}
+	model.Grid.Selection = workbook.CellRange{}
+	model.Grid.ColumnWidths = make(map[int]int)
+	model.visibleSheet = ""
+	model.filtersDirty = true
+	model.layout()
+}
+
+func (model *AppModel) selectedRangeName() string {
+	if model == nil {
+		return "A1"
+	}
+	selection := model.Grid.Selection
+	if selection == (workbook.CellRange{}) && model.Grid.Selected != (workbook.Coord{}) {
+		selection = workbook.CellRange{Start: model.Grid.Selected, End: model.Grid.Selected}
+	}
+	startRow := min(selection.Start.Row, selection.End.Row)
+	endRow := max(selection.Start.Row, selection.End.Row)
+	startCol := min(selection.Start.Col, selection.End.Col)
+	endCol := max(selection.Start.Col, selection.End.Col)
+	start := columnName(startCol) + itoa(startRow+1)
+	end := columnName(endCol) + itoa(endRow+1)
+	if start == end {
+		return start
+	}
+	return start + ":" + end
+}
+
+func (model *AppModel) defaultFormulaTargetName() string {
+	target := model.Grid.Selected
+	startCol, startRow, endCol, endRow, err := parseA1Range(model.selectedRangeName())
+	if err == nil && target.Col >= startCol && target.Col <= endCol && target.Row >= startRow && target.Row <= endRow {
+		target = workbook.Coord{Row: endRow + 1, Col: startCol}
+	}
+	return columnName(target.Col) + itoa(target.Row+1)
+}
+
+func (model *AppModel) handleFormulaPickerKey(message tea.KeyMsg) {
+	submitted, cancelled := model.FunctionPicker.HandleKey(message)
+	if cancelled {
+		model.FunctionPicker = formulaPickerState{}
+		return
+	}
+	if !submitted {
+		return
+	}
+	formula, err := model.FunctionPicker.Formula()
+	if err != nil {
+		model.status = err.Error()
+		return
+	}
+	targetCol, targetRow, err := parseA1Cell(model.FunctionPicker.TargetInput.Value())
+	if err != nil {
+		model.status = "Invalid result cell: " + err.Error()
+		return
+	}
+	if startCol, startRow, endCol, endRow, rangeErr := parseA1Range(model.FunctionPicker.RangeInput.Value()); rangeErr == nil &&
+		targetCol >= startCol && targetCol <= endCol && targetRow >= startRow && targetRow <= endRow {
+		model.status = "Result cell must be outside the input range"
+		return
+	}
+	sheet := model.activeSheet()
+	if sheet == nil {
+		model.FunctionPicker = formulaPickerState{}
+		return
+	}
+	if err := workbook.SetCell(model.session, workbook.CellAddress{Sheet: sheet.Name, Row: targetRow, Col: targetCol}, formula); err != nil {
+		model.status = err.Error()
+		return
+	}
+	model.Grid.Selected = workbook.Coord{Row: targetRow, Col: targetCol}
+	model.Grid.Selection = workbook.CellRange{}
+	model.FunctionPicker = formulaPickerState{}
+	model.status = ""
+	model.layout()
+}
+
 func (model *AppModel) inputOverlay() string {
 	switch {
 	case model.editing:
-		return "Edit: " + model.editor
+		return model.editorInput.View()
 	case model.findMode:
 		return "Find: " + model.findQuery + "_"
 	case model.operation.Mode != "":
