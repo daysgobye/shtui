@@ -17,6 +17,7 @@ type CellAddress struct {
 
 var supportedFormulaFunctions = map[string]struct{}{
 	"SUM": {}, "AVERAGE": {}, "COUNT": {}, "MIN": {}, "MAX": {}, "IF": {},
+	"COUNTIF": {}, "IFERROR": {}, "COUNTA": {},
 }
 
 // Recalculate updates all formula results so cross-cell and cross-sheet dependents stay current.

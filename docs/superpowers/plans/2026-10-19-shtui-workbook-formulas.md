@@ -15,12 +15,13 @@
 - Keep Go, Bubble Tea/Bubbles, Lip Gloss, and the current workbook/Excelize layers; no new dependency is proposed.
 - Reuse Excelize's existing formula calculation path. Extend its supported-function guard and the function-picker catalog together, based on verified engine behavior.
 - Do not introduce a custom formula evaluator or claim support if Excelize cannot calculate a function reliably.
+- The pinned Excelize engine returns `60` for `SUMIF(A1:A3,">0",B1:B3)` when A1:A2 are positive numbers, A3 is text, and B1:B3 are 10, 20, and 30; the expected result is `30`. Keep SUMIF unavailable and stale until the engine calculates this case correctly.
 - Unsupported formulas remain preserved as source and continue to surface calculation errors instead of substituting a value.
 - `COUNT` is already supported and remains in the function picker.
 
 ## Review Focus
 
-1. Criteria with quoted text and numeric comparisons calculate correctly. Assert `COUNTIF(A1:A3,"pear")` is `1`, `COUNTIF(A1:A3,">0")` is `2`, `SUMIF(A1:A3,"pear",B1:B3)` is `30`, and `SUMIF(A1:A3,">0",B1:B3)` is `30` in `TestAdditionalFormulaFunctions`.
+1. Quoted text and numeric criteria calculate correctly with COUNTIF. Assert `COUNTIF(A1:A3,"pear")` is `1` and `COUNTIF(A1:A3,">0")` is `2` in `TestAdditionalFormulaFunctions`. Do not enable SUMIF: direct Excelize probing returns `60`, not the expected `30`, for numeric `">0"` criteria over mixed numeric/text cells.
 2. `IFERROR` catches a nested calculation error and returns the fallback, while ordinary calculation errors remain errors. Assert both in `TestAdditionalFormulaFunctions` and existing error-state coverage.
 3. `COUNTA` is enabled only if the pinned Excelize version calculates blank/nonblank ranges correctly. Run the direct Excelize probe before adding it to the supported list; if it fails, omit it and report the limitation.
 4. Nested calls no longer become stale merely because a newly supported function appears inside them. Assert `IFERROR(COUNTIF(A1:A3,">0")/COUNT(A1:A3),0)` returns `"1"` with current calculation state.
@@ -35,29 +36,29 @@
 
 **Interfaces:**
 - Consumes: `supportedFormulaFunctions`, `hasUnsupportedFunction`, `Recalculate`, and `excelize.File.CalcCellValue`.
-- Produces: verified support for `COUNTIF`, `SUMIF`, `IFERROR`, and `COUNTA` only where the current Excelize dependency returns correct results; `COUNT` behavior remains unchanged.
+- Produces: verified support for `COUNTIF`, `IFERROR`, and `COUNTA` only where the current Excelize dependency returns correct results; `COUNT` behavior remains unchanged. `SUMIF` remains unavailable because numeric comparison criteria produce an incorrect engine result.
 
-- [ ] **Step 1: Probe Excelize's `COUNTA` behavior before enabling it**
+- [x] **Step 1: Probe Excelize's `COUNTA` behavior before enabling it**
   - In a throwaway test file, create a numeric cell, text cell, and blank in one range; call Excelize calculation for `COUNTA(A1:A3)` and assert the result is `2`. Delete the probe after recording the result.
-  - Run: `go test ./internal/workbook -run TestExcelizeCalculatesCountaRange -count=1`. If the pinned engine does not return `2`, exclude COUNTA from the supported-function list; do not substitute a custom evaluator. If it passes, keep the `COUNTA(A1:A3) == 3` assertion in Step 2's permanent application-level test.
-- [ ] **Step 2: Write failing recalculation tests for supported functions**
-  - Add `TestAdditionalFormulaFunctions` using literals `A1=2`, `A2=4`, `A3="pear"`, `B1=10`, `B2=20`, `B3=30`; assert `COUNTIF(A1:A3,"pear")` is `1`, `COUNTIF(A1:A3,">0")` is `2`, `SUMIF(A1:A3,"pear",B1:B3)` is `30`, `SUMIF(A1:A3,">0",B1:B3)` is `30`, and `IFERROR(1/0,"safe")` is `safe`.
-  - If Step 1 passed, also assert `COUNTA(A1:A3)` is `3`.
+  - Run: `go test ./internal/workbook -run TestExcelizeCalculatesCountaRange -count=1`. Result: PASS; Excelize returned `2` for two nonblank cells and one blank.
+- [x] **Step 2: Write failing recalculation tests for supported functions**
+  - Add `TestAdditionalFormulaFunctions` using literals `A1=2`, `A2=4`, `A3="pear"`; assert `COUNTIF(A1:A3,"pear")` is `1`, `COUNTIF(A1:A3,">0")` is `2`, `IFERROR(1/0,"safe")` is `safe`, and `COUNTA(A1:A3)` is `3`.
+  - Add `TestUnreliableSumIfRemainsStale` to preserve the original formula and cached result rather than exposing Excelize's wrong numeric-criteria SUMIF output.
   - Add `TestNestedSupportedFunctionsRecalculate` asserting `IFERROR(COUNTIF(A1:A3,">0")/COUNT(A1:A3),0)` has the expected current result and unchanged formula source.
-- [ ] **Step 3: Run focused tests and confirm they fail**
+- [x] **Step 3: Run focused tests and confirm they fail**
 
   Run: `go test ./internal/workbook -run 'TestAdditionalFormulaFunctions|TestNestedSupportedFunctionsRecalculate' -count=1`
 
   Expected: FAIL because the supported-function guard marks these formulas stale.
-- [ ] **Step 4: Enable only verified functions**
-  - Add `COUNTIF`, `SUMIF`, and `IFERROR` to `supportedFormulaFunctions`; add `COUNTA` only if Step 1 proves it.
+- [x] **Step 4: Enable only verified functions**
+  - Add `COUNTIF` and `IFERROR` to `supportedFormulaFunctions`; add `COUNTA` only after Step 1 passes. Keep SUMIF out until the numeric-criteria engine result is correct.
   - Do not change the generic Excelize recalculation/error path. Preserve original formula input for current, stale, and error results.
-- [ ] **Step 5: Run workbook formula tests**
+- [x] **Step 5: Run workbook formula tests**
 
-  Run: `go test ./internal/workbook -run 'Test.*Formula|TestCommonFormulaFunctions' -count=1`
+  Run: `go test ./internal/workbook -run 'Test.*Formula|TestCommonFormulaFunctions|TestUnreliableSumIfRemainsStale' -count=1`
 
   Expected: PASS; every enabled function has the asserted result and current state, while unsupported/error cases retain their existing semantics.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add internal/workbook/formula.go internal/workbook/formula_test.go
@@ -72,12 +73,11 @@
 
 **Interfaces:**
 - Consumes: Task 1's verified function set, `functionDefinition`, `formulaPickerState.Formula`, and the existing single argument text input.
-- Produces: picker entries and syntax previews for `COUNTIF(range, criteria)`, `SUMIF(range, criteria, sum_range)`, `IFERROR(value, value_if_error)`, and verified `COUNTA(range)`; generated formula text preserves the user's complete comma-separated arguments.
+- Produces: picker entries and syntax previews for `COUNTIF(range, criteria)`, `IFERROR(value, value_if_error)`, and verified `COUNTA(range)`; generated formula text preserves the user's complete comma-separated arguments. Keep SUMIF out of the picker while Excelize miscalculates numeric criteria.
 
 - [ ] **Step 1: Write failing formula-picker tests**
-  - Add `TestFormulaPickerAdditionalFunctions` as table-driven cases: `COUNTIF` with `A1:A3,">0"`; `SUMIF` with `A1:A3,">0",B1:B3`; `IFERROR` with `A1/0,"safe"`; and `COUNTA` with `A1:A3` only if enabled in Task 1.
-  - Assert each function appears in the list, the syntax preview names the correct arguments, and `Formula()` returns the exact `=`-prefixed expression.
-  - Assert the existing COUNT formula still returns `=COUNT(A1:A3)`.
+  - Add `TestFormulaPickerAdditionalFunctions` as table-driven cases: `COUNTIF` with `A1:A3,">0"`; `IFERROR` with `A1/0,"safe"`; `COUNTA` with `A1:A3` only if enabled in Task 1; and existing `COUNT` with `A1:A3`.
+  - Assert each function appears in the list, the syntax preview names the correct arguments, and `Formula()` returns the exact `=`-prefixed expression. Assert SUMIF is omitted.
 - [ ] **Step 2: Run focused picker tests and confirm they fail**
 
   Run: `go test ./internal/ui -run 'TestFormulaPickerAdditionalFunctions' -count=1`
@@ -88,14 +88,14 @@
   - For multi-argument functions, accept the entered expression as the function's full argument list rather than passing it through the single-range parser; retain range validation for existing one-range functions.
   - Keep the picker preview synchronized with the exact generated formula and omit COUNTA if Task 1 did not enable it.
 - [ ] **Step 4: Update formula usage documentation**
-  - Update `docs/usage.md` to list the additional verified functions and give examples for criteria, SUMIF, and IFERROR; retain the warning that Excelize support is not full Excel compatibility.
+  - Update `docs/usage.md` to list the additional verified functions and give examples for COUNTIF and IFERROR; document that numeric-criteria SUMIF is kept stale because the pinned engine returns an incorrect total. Retain the warning that Excelize support is not full Excel compatibility.
 - [ ] **Step 5: Run picker and workbook integration checks**
 
   Run: `go test ./internal/ui -run 'TestFormulaPickerAdditionalFunctions' -count=1 && go test ./internal/workbook -run 'TestAdditionalFormulaFunctions|TestNestedSupportedFunctionsRecalculate' -count=1`
 
   Expected: PASS; picker output matches formulas that the workbook layer recalculates correctly.
 
-  Then use a throwaway Go smoke program to open `test_sheets/Cozy_Bullet_Journal_Render_Test.xlsx`, recalculate a representative formula from each newly supported function, and assert the formula source remains unchanged and the calculation state is current where Excelize supports it. Remove the program after the run; record any remaining formula errors instead of hiding them.
+  Then use a throwaway Go smoke program to open `test_sheets/Cozy_Bullet_Journal_Render_Test.xlsx`, recalculate representative supported formulas, and assert the formula source remains unchanged and the calculation state is current where Excelize supports it. Confirm numeric-criteria SUMIF remains stale rather than reporting its wrong total. Remove the program after the run; record any remaining fixture formula errors instead of hiding them.
 - [ ] **Step 6: Commit**
 
   ```bash

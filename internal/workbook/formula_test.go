@@ -58,6 +58,89 @@ func TestCommonFormulaFunctions(t *testing.T) {
 	}
 }
 
+func TestAdditionalFormulaFunctions(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "2")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "4")
+	setFormulaLiteral(t, session, "Sheet1", "A3", "pear")
+	formulas := map[CellAddress]string{
+		{Sheet: "Sheet1", Row: 0, Col: 2}: `COUNTIF(A1:A3,"pear")`,
+		{Sheet: "Sheet1", Row: 1, Col: 2}: `COUNTIF(A1:A3,">0")`,
+		{Sheet: "Sheet1", Row: 2, Col: 2}: `IFERROR(1/0,"safe")`,
+		{Sheet: "Sheet1", Row: 3, Col: 2}: `COUNTA(A1:A3)`,
+	}
+	for address, formula := range formulas {
+		cell := Cell{Input: "=" + formula, CalculationState: Stale}
+		session.Workbook.Sheets[0].Cells[Coord{Row: address.Row, Col: address.Col}] = cell
+		if err := session.file.SetCellFormula("Sheet1", mustCellName(t, address.Row, address.Col), formula); err != nil {
+			t.Fatalf("SetCellFormula %s: %v", formula, err)
+		}
+	}
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	want := map[CellAddress]string{
+		{Sheet: "Sheet1", Row: 0, Col: 2}: "1",
+		{Sheet: "Sheet1", Row: 1, Col: 2}: "2",
+		{Sheet: "Sheet1", Row: 2, Col: 2}: "safe",
+		{Sheet: "Sheet1", Row: 3, Col: 2}: "3",
+	}
+	for address, result := range want {
+		cell := formulaCell(t, session, address)
+		if cell.Result != result || cell.CalculationState != Current {
+			t.Errorf("%+v formula %q result = (%q, %q), want (%q, current)", address, formulas[address], cell.Result, cell.CalculationState, result)
+		}
+		if cell.Input != "="+formulas[address] {
+			t.Errorf("formula source = %q, want %q", cell.Input, "="+formulas[address])
+		}
+	}
+}
+func TestUnreliableSumIfRemainsStale(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "2")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "4")
+	setFormulaLiteral(t, session, "Sheet1", "A3", "pear")
+	setFormulaLiteral(t, session, "Sheet1", "B1", "10")
+	setFormulaLiteral(t, session, "Sheet1", "B2", "20")
+	setFormulaLiteral(t, session, "Sheet1", "B3", "30")
+	formula := `SUMIF(A1:A3,">0",B1:B3)`
+	setFormula(t, session, "Sheet1", "C1", formula)
+	cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	cell.Result = "cached"
+	session.Workbook.Sheets[0].Cells[Coord{Row: 0, Col: 2}] = cell
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	cell = formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if cell.Input != "="+formula || cell.Result != "cached" || cell.CalculationState != Stale {
+		t.Fatalf("unreliable SUMIF cell = (%q, %q, %q), want original formula, cached result, stale", cell.Input, cell.Result, cell.CalculationState)
+	}
+}
+
+func TestNestedSupportedFunctionsRecalculate(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "2")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "4")
+	setFormulaLiteral(t, session, "Sheet1", "A3", "pear")
+	formula := `IFERROR(COUNTIF(A1:A3,">0")/COUNT(A1:A3),0)`
+	setFormula(t, session, "Sheet1", "B1", formula)
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 1})
+	if cell.Input != "="+formula || cell.Result != "1" || cell.CalculationState != Current {
+		t.Fatalf("nested formula cell = (%q, %q, %q), want (%q, 1, current)", cell.Input, cell.Result, cell.CalculationState, "="+formula)
+	}
+}
+
+func mustCellName(t *testing.T, row, col int) string {
+	t.Helper()
+	name, err := excelize.CoordinatesToCellName(col+1, row+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
 func TestFormulaDependencyRecalculation(t *testing.T) {
 	session := newFormulaSession(t)
 	setFormulaLiteral(t, session, "Sheet1", "A1", "2")
