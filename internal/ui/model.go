@@ -232,10 +232,18 @@ func (model *AppModel) handleKey(message tea.KeyMsg) {
 	}
 	switch {
 	case model.keys.Matches(message, model.keys.Undo):
-		model.setStatus(workbook.Undo(model.session))
+		err := workbook.Undo(model.session)
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Undid workbook change")
+		}
 		model.filtersDirty = true
 	case model.keys.Matches(message, model.keys.Redo):
-		model.setStatus(workbook.Redo(model.session))
+		err := workbook.Redo(model.session)
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Redid workbook change")
+		}
 		model.filtersDirty = true
 	case model.keys.Matches(message, model.keys.PreviousSheet):
 		model.changeSheet(-1)

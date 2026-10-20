@@ -742,6 +742,31 @@ func TestExitSummarySaveAndLaterEdits(t *testing.T) {
 	}
 }
 
+func TestExitSummaryKeyboardUndoRedo(t *testing.T) {
+	controller := NewController("")
+	controller.newWorkbook(workbook.CSV)
+	t.Cleanup(func() { _ = controller.session.Close() })
+	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("value")})
+	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+	if got, want := controller.exitSummary(), "Undid workbook change (not saved)"; got != want {
+		t.Fatalf("undo summary = %q, want %q", got, want)
+	}
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+	if got, want := controller.exitSummary(), "Undid workbook change (not saved)"; got != want {
+		t.Fatalf("failed second undo changed summary to %q, want %q", got, want)
+	}
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	if got, want := controller.exitSummary(), "Redid workbook change (not saved)"; got != want {
+		t.Fatalf("redo summary = %q, want %q", got, want)
+	}
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	if got, want := controller.exitSummary(), "Redid workbook change (not saved)"; got != want {
+		t.Fatalf("failed second redo changed summary to %q, want %q", got, want)
+	}
+}
+
 func TestExitSummaryIgnoresFailedOrCanceledSave(t *testing.T) {
 	controller := NewController("")
 	controller.newWorkbook(workbook.CSV)

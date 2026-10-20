@@ -77,13 +77,14 @@
   - Add `TestExitSummarySaveAndLaterEdits`: successful save reports the destination; later edits mark the summary unsaved rather than implying they were saved.
   - Add `TestExitSummaryIgnoresFailedOrCanceledSave`: a failed save or canceled save choice never replaces a prior successful action with a false Saved message.
   - Add `TestRunPrintsSummaryOnlyAfterConfirmedQuit` around a testable post-Run formatter/print helper; assert no summary for context cancellation and summary text after confirmation.
+  - Add `TestExitSummaryKeyboardUndoRedo`: Ctrl+Z and Ctrl+Y replace the previous edit summary after successful history changes.
 - [x] **Step 2: Run focused tests and confirm they fail**
 
   Run: `go test ./internal/app -run 'TestExitSummary|TestRunPrintsSummary' -count=1`
 
   Expected: FAIL because Run currently discards the returned model and prints no summary.
 - [x] **Step 3: Track successful actions and print after terminal restoration**
-  - Have the UI expose successful action summaries for edits and workbook commands; drain them in Controller after UI updates. Controller records successful open/create/save events and only records Saved after `saveCompleteMsg.err == nil`.
+  - Have the UI expose successful action summaries for edits and workbook commands; drain them in Controller after UI updates. Both keyboard and command-palette undo/redo record successful history changes. Controller records successful open/create/save events and only records Saved after `saveCompleteMsg.err == nil`.
   - Derive the unsaved suffix from `Workbook.Dirty`; include the workbook path when known and identify untitled workbooks as not saved.
   - Retain the `Controller` passed to `tea.NewProgram`; after `program.Run()` returns successfully, print a compact Shtui wordmark and `exitSummary()` only if quit was confirmed. Keep errors/context cancellation from being reported as a user-confirmed quit.
   - Update `docs/usage.md` with the first-Ctrl+C, second-Ctrl+C, mouse, and post-exit summary behavior.
