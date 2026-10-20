@@ -26,6 +26,7 @@ type colorTarget string
 const (
 	fillColorTarget              colorTarget = "fill"
 	fontColorTarget              colorTarget = "font"
+	borderColorTarget            colorTarget = "border"
 	conditionalDialogColorTarget colorTarget = "conditional-dialog"
 )
 
@@ -506,6 +507,8 @@ func (model *AppModel) runCommand(command string) {
 		model.openColorPicker(fillColorTarget)
 	case "font-color":
 		model.openColorPicker(fontColorTarget)
+	case "border-color":
+		model.openColorPicker(borderColorTarget)
 	case "sort":
 		model.beginOperation("sort")
 	case "filter":
@@ -515,15 +518,8 @@ func (model *AppModel) runCommand(command string) {
 		model.operation = pendingOperation{}
 	case "insert-function":
 		model.FunctionPicker = newFormulaPicker(model.selectedRangeName(), model.defaultFormulaTargetName())
-	case "border-menu":
-		model.Palette.Show()
-		model.Palette.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("border")})
-	case "border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right", "border-none":
-		err := workbook.ApplyBorderPreset(model.session, model.activeSheet().Name, model.selectedRange(), strings.TrimPrefix(command, "border-"))
-		model.setStatus(err)
-		if err == nil && command != "border-none" {
-			model.showCSVFeatureNotice()
-		}
+	case "border-none":
+		model.setStatus(workbook.RemoveBorders(model.session, model.activeSheet().Name, model.selectedRange()))
 	case "toggle-bold":
 		style := model.activeSheet().Cells[model.Grid.Selected].Style
 		style.Bold = !style.Bold
@@ -716,6 +712,10 @@ func (model *AppModel) applyColor(color RGB) {
 		model.ConditionalDialog.SetColor(strings.TrimPrefix(FormatRGBHex(color), "#"))
 		return
 	}
+	if model.ColorPicker.Target == borderColorTarget {
+		model.applyBorderColor(strings.TrimPrefix(FormatRGBHex(color), "#"))
+		return
+	}
 	style := model.activeSheet().Cells[model.Grid.Selected].Style
 	if model.ColorPicker.Target == fillColorTarget {
 		style.FillRGB = strings.TrimPrefix(FormatRGBHex(color), "#")
@@ -725,7 +725,23 @@ func (model *AppModel) applyColor(color RGB) {
 	model.applyCellStyle(style)
 }
 
+func (model *AppModel) applyBorderColor(colorRGB string) {
+	sheet := model.activeSheet()
+	if sheet == nil {
+		return
+	}
+	err := workbook.ApplyBorderColor(model.session, sheet.Name, model.selectedRange(), colorRGB)
+	model.setStatus(err)
+	if err == nil {
+		model.showCSVFeatureNotice()
+	}
+}
+
 func (model *AppModel) applyDefaultColor() {
+	if model.ColorPicker.Target == borderColorTarget {
+		model.applyBorderColor("")
+		return
+	}
 	if model.session == nil || model.session.Workbook == nil {
 		return
 	}

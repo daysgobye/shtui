@@ -33,7 +33,7 @@ var toolbarItems = []toolbarItem{
 	{ID: "insert-column", Label: "+ Col"},
 	{ID: "fill-color", Label: "Fill"},
 	{ID: "font-color", Label: "Font"},
-	{ID: "border-menu", Label: "Borders"},
+	{ID: "border-color", Label: "Border color"},
 	{ID: "sort", Label: "Sort"},
 	{ID: "filter", Label: "Filter"},
 }

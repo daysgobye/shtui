@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -371,53 +372,87 @@ func draftConditionalRule(model *AppModel, value string, lessThan bool) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 }
 
-func TestBorderMenuAppliesPresetToSelectedRange(t *testing.T) {
-	session, err := workbook.NewWorkbook(workbook.XLSX)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = session.Close() })
-	model := NewModel(session)
+func TestBorderColorPickerMouseActions(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.width, model.height = 80, 24
 	model.Grid.Selection = workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1, Col: 1}}
-	if err := workbook.ApplyStyle(session, session.Workbook.Sheets[0].Name, workbook.CellRange{}, workbook.CellStyle{FillRGB: "112233", Bold: true}); err != nil {
-		t.Fatal(err)
-	}
+	wantTheme := RGB{R: 0x12, G: 0x34, B: 0x56}
+	model.themeQuery = func(uint8, time.Duration) (RGB, bool) { return wantTheme, true }
 
-	model.runCommand("border-all")
-	for row := 0; row <= 1; row++ {
-		for col := 0; col <= 1; col++ {
-			borders := session.Workbook.Sheets[0].Cells[workbook.Coord{Row: row, Col: col}].Style.Borders
-			if borders.Top.Preset != "thin" || borders.Right.Preset != "thin" || borders.Bottom.Preset != "thin" || borders.Left.Preset != "thin" {
-				t.Errorf("All preset at (%d,%d) = %#v", row, col, borders)
-			}
-		}
+	model.runCommand("border-color")
+	if !model.ColorPicker.Open || model.ColorPicker.Target != colorTarget("border") {
+		t.Fatalf("Border color did not open the border picker: %#v", model.ColorPicker)
 	}
-	if cell := session.Workbook.Sheets[0].Cells[workbook.Coord{}]; cell.Style.FillRGB != "112233" || !cell.Style.Bold {
-		t.Fatalf("All border preset replaced non-border formatting: %#v", cell.Style)
+	x, y := renderedTextPosition(t, &model, "Red")
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	assertSelectedBorderColor(t, &model, "123456")
+
+	model.runCommand("border-color")
+	x, y = renderedTextPosition(t, &model, "Add custom RGB")
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if !model.ColorPicker.EditingInput {
+		t.Fatal("clicking Add custom RGB did not focus its input")
 	}
-	if err := workbook.Undo(session); err != nil {
-		t.Fatal(err)
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#A1B2C3")})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assertSelectedBorderColor(t, &model, "A1B2C3")
+
+	model.runCommand("border-color")
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: 0, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if model.ColorPicker.Open {
+		t.Fatal("outside click did not dismiss Border color picker")
 	}
-	for row := 0; row <= 1; row++ {
-		for col := 0; col <= 1; col++ {
-			if borders := session.Workbook.Sheets[0].Cells[workbook.Coord{Row: row, Col: col}].Style.Borders; borders != (workbook.BorderSet{}) {
-				t.Fatalf("undo of border preset left borders at (%d,%d): %#v", row, col, borders)
-			}
-		}
-	}
-	if cell := session.Workbook.Sheets[0].Cells[workbook.Coord{}]; cell.Style.FillRGB != "112233" || !cell.Style.Bold {
-		t.Fatalf("undo of border preset changed fill/font style: %#v", cell.Style)
-	}
-	if err := workbook.Redo(session); err != nil {
-		t.Fatal(err)
-	}
+	assertSelectedBorderColor(t, &model, "A1B2C3")
 
 	model.runCommand("border-none")
 	for row := 0; row <= 1; row++ {
 		for col := 0; col <= 1; col++ {
-			borders := session.Workbook.Sheets[0].Cells[workbook.Coord{Row: row, Col: col}].Style.Borders
-			if borders != (workbook.BorderSet{}) {
-				t.Errorf("None preset at (%d,%d) = %#v, want no borders", row, col, borders)
+			if borders := model.activeSheet().Cells[workbook.Coord{Row: row, Col: col}].Style.Borders; borders != (workbook.BorderSet{}) {
+				t.Errorf("Remove borders left cell (%d,%d) with %#v", row, col, borders)
+			}
+		}
+	}
+}
+
+func TestBorderColorAppliesToSelectedRange(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.Grid.Selection = workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1, Col: 1}}
+	model.themeQuery = func(uint8, time.Duration) (RGB, bool) {
+		return RGB{R: 0xAA, G: 0xBB, B: 0xCC}, true
+	}
+	model.runCommand("border-color")
+	model.ColorPicker.Selected = 1
+	model.handleColorKey(tea.KeyMsg{Type: tea.KeyEnter})
+	assertSelectedBorderColor(t, &model, "AABBCC")
+}
+func TestBorderColorCSVNoticeOnlyAfterApply(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.width, model.height = 80, 24
+	model.runCommand("border-color")
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: 0, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if model.csvNotice != "" {
+		t.Fatalf("canceling border picker showed a CSV notice: %q", model.csvNotice)
+	}
+
+	model.runCommand("border-color")
+	x, y := renderedTextPosition(t, &model, "Red")
+	model.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if model.csvNotice == "" {
+		t.Fatal("successful border color application did not show a CSV notice")
+	}
+}
+
+func assertSelectedBorderColor(t *testing.T, model *AppModel, want string) {
+	t.Helper()
+	for row := 0; row <= 1; row++ {
+		for col := 0; col <= 1; col++ {
+			borders := model.activeSheet().Cells[workbook.Coord{Row: row, Col: col}].Style.Borders
+			for side, border := range map[string]workbook.BorderStyle{
+				"top": borders.Top, "right": borders.Right, "bottom": borders.Bottom, "left": borders.Left,
+			} {
+				if border.Preset != "thin" || border.ColorRGB != want {
+					t.Errorf("cell (%d,%d) %s border = %#v, want thin #%s", row, col, side, border, want)
+				}
 			}
 		}
 	}
@@ -442,7 +477,7 @@ func TestToolbarOverflowRetainsBorderCommands(t *testing.T) {
 	if !model.Palette.Open {
 		t.Fatal("More did not open the command palette")
 	}
-	for _, id := range []string{"border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right", "border-none"} {
+	for _, id := range []string{"border-color", "border-none"} {
 		found := false
 		for _, item := range model.Palette.list.Items() {
 			if item, ok := item.(paletteItem); ok && item.command.ID == id {
@@ -454,17 +489,23 @@ func TestToolbarOverflowRetainsBorderCommands(t *testing.T) {
 			t.Errorf("overflow palette does not retain %q", id)
 		}
 	}
-	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("all borders")})
+	for _, removed := range []string{"border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right"} {
+		for _, item := range model.Palette.list.Items() {
+			if item, ok := item.(paletteItem); ok && item.command.ID == removed {
+				t.Errorf("overflow palette still exposes obsolete command %q", removed)
+			}
+		}
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("border color")})
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	borders := session.Workbook.Sheets[0].Cells[workbook.Coord{}].Style.Borders
-	if model.lastCommand != "border-all" || borders == (workbook.BorderSet{}) {
-		t.Fatalf("selecting the overflow border command left command=%q borders=%#v", model.lastCommand, borders)
+	if model.lastCommand != "border-color" || !model.ColorPicker.Open {
+		t.Fatalf("selecting Border color left command=%q pickerOpen=%t", model.lastCommand, model.ColorPicker.Open)
 	}
 }
 
 func TestPaletteIncludesCoreWorkbookOperations(t *testing.T) {
 	palette := NewCommandPalette(DefaultKeyMap())
-	for _, expected := range []string{"sort", "filter", "border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right", "border-none", "merge", "unmerge", "conditional-format", "toggle-bold", "add-sheet", "open-file", "save-as"} {
+	for _, expected := range []string{"sort", "filter", "border-color", "border-none", "merge", "unmerge", "conditional-format", "toggle-bold", "add-sheet", "open-file", "save-as"} {
 		found := false
 		for _, item := range palette.list.Items() {
 			if item, ok := item.(paletteItem); ok && item.command.ID == expected {
@@ -474,6 +515,13 @@ func TestPaletteIncludesCoreWorkbookOperations(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("command palette missing %q", expected)
+		}
+	}
+	for _, removed := range []string{"border-all", "border-outside", "border-top", "border-bottom", "border-left", "border-right"} {
+		for _, item := range palette.list.Items() {
+			if item, ok := item.(paletteItem); ok && item.command.ID == removed {
+				t.Errorf("command palette still exposes obsolete command %q", removed)
+			}
 		}
 	}
 }
@@ -702,7 +750,11 @@ func TestCSVFeatureNoticeAppearsAfterSuccessfulMutation(t *testing.T) {
 		},
 		{
 			name: "border formatting",
-			run:  func(model *AppModel) { model.runCommand("border-all") },
+			run: func(model *AppModel) {
+				model.runCommand("border-color")
+				model.ColorPicker.Selected = 1
+				model.handleColorKey(tea.KeyMsg{Type: tea.KeyEnter})
+			},
 		},
 		{
 			name: "merge",

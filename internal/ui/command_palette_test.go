@@ -118,6 +118,28 @@ func TestToolbarPrimaryActionsFitAndAreClickableAt80Columns(t *testing.T) {
 	}
 }
 
+func TestBorderColorToolbarButtonOpensPicker(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.width, model.height = 200, 24
+	borderX := -1
+	for x := range model.width {
+		if toolbarActionAtWidth(x, model.width) == "border-color" {
+			borderX = x
+			break
+		}
+	}
+	if borderX < 0 {
+		t.Fatal("toolbar has no Border color action")
+	}
+
+	model.Update(tea.MouseMsg(tea.MouseEvent{
+		X: borderX, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	}))
+	if !model.ColorPicker.Open || model.ColorPicker.Target != borderColorTarget {
+		t.Fatalf("clicking Border opened picker=%t target=%q, want border color picker", model.ColorPicker.Open, model.ColorPicker.Target)
+	}
+}
+
 func TestToolbarOverflowRetainsCommandsAtNarrowWidths(t *testing.T) {
 	model := newInteractionModel(t, 1)
 	model.width, model.height = 30, 24

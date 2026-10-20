@@ -55,7 +55,7 @@
   Run: `go test ./internal/workbook -run 'TestApplyBorderColor|TestRemoveBorders|TestUndoStyle' -count=1`
 
   Expected: PASS; RGB is stored on every selected edge, unrelated formatting is unchanged, and removal/history are range-local.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `31114a5` (`feat(workbook): apply colored cell borders`)
 
   ```bash
   git add internal/workbook/styles.go internal/workbook/xlsx.go internal/workbook/styles_test.go
@@ -65,26 +65,26 @@
 ### Task 2: Replace border presets with the color-picker action
 
 **Files:**
-- Modify: `internal/ui/model.go`, `internal/ui/command_palette.go`, `internal/ui/toolbar.go`, `internal/ui/model_test.go`, `internal/ui/command_palette_test.go`, `internal/workbook/styles.go`, `docs/usage.md`
+- Modify: `internal/ui/model.go`, `internal/ui/command_palette.go`, `internal/ui/toolbar.go`, `internal/ui/operations_test.go`, `internal/ui/command_palette_test.go`, `internal/workbook/styles.go`, `docs/usage.md`
 
 **Interfaces:**
 - Consumes: Task 1's `ApplyBorderColor` and `RemoveBorders`, plus existing `openColorPicker`, `ThemePalette`, `selectedRange`, and CSV notice behavior.
 - Produces: a **Border color** command and toolbar action that opens the existing color picker; selecting a theme or RGB color applies all four borders. **Remove borders** remains directly reachable.
 
-- [ ] **Step 1: Write failing UI and palette tests**
+- [x] **Step 1: Write failing UI and palette tests**
   - Add `TestBorderColorPickerMouseActions` for a theme-color click applying the chosen RGB to all four edges, a custom RGB selection applying that value, and outside-click dismissal leaving borders unchanged.
   - Add `TestBorderColorAppliesToSelectedRange` for a multi-cell selection and `TestBorderColorCSVNoticeOnlyAfterApply` for successful apply versus canceled picker.
   - Add a palette assertion that **Border color** and **Remove borders** are present and all six old edge-preset entries are absent.
-- [ ] **Step 2: Run focused tests and confirm they fail**
+- [x] **Step 2: Run focused tests and confirm they fail**
 
   Run: `go test ./internal/ui -run 'TestBorderColor|TestRemoveBorders|TestCommandPalette' -count=1`
 
   Expected: FAIL because the palette still exposes the preset actions and the color picker has no border target.
-- [ ] **Step 3: Implement UI routing and remove obsolete actions**
+- [x] **Step 3: Implement UI routing and remove obsolete actions**
   - Add a border color target and route it through `ApplyBorderColor` after resolving the selected theme/custom color.
   - Replace the toolbar's Borders menu action with **Border color**; remove old preset command registrations and dispatch; keep **Remove borders** routed through `RemoveBorders`.
   - Show the existing CSV feature notice only after a successful apply; update `docs/usage.md` to describe the two border actions and color behavior.
-- [ ] **Step 4: Run focused UI and workbook tests**
+- [x] **Step 4: Run focused UI and workbook tests**
 
   Run: `go test ./internal/ui -run 'TestBorderColor|TestRemoveBorders|TestCommandPalette' -count=1 && go test ./internal/workbook -run 'TestApplyBorderColor|TestRemoveBorders' -count=1`
 
@@ -92,6 +92,6 @@
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add internal/ui/model.go internal/ui/command_palette.go internal/ui/toolbar.go internal/ui/model_test.go internal/ui/command_palette_test.go docs/usage.md
+  git add internal/ui/model.go internal/ui/command_palette.go internal/ui/toolbar.go internal/ui/operations_test.go internal/ui/command_palette_test.go internal/workbook/styles.go docs/usage.md docs/superpowers/plans/2026-10-19-shtui-colored-borders.md
   git commit -m "feat(ui): add color picker for cell borders"
   ```
