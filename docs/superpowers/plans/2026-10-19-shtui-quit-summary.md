@@ -92,7 +92,7 @@
 
   Run: `go test ./internal/app -run 'TestQuitConfirmation|TestExitSummary|TestRunPrintsSummary' -count=1`
 
-  Expected: PASS; output is gated on confirmed quit and accurately distinguishes saved, unsaved, and canceled/failed operations. Then launch the native app in a PTY, test Nope by mouse and keyboard, Yep by mouse and keyboard, double Ctrl+C, and observe that the logo/summary appears after the alternate screen exits.
+  Expected: PASS; tests verify keyboard and mouse Nope/Yep, dirty-state warnings, and double Ctrl+C. Then launch the native app in a PTY, create a CSV workbook, cancel and confirm quit, and observe the logo/summary after the alternate screen exits.
 - [x] **Step 5: Commit**
 
   ```bash
