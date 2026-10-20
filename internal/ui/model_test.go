@@ -325,7 +325,10 @@ func TestFunctionPickerAcceptsAllThreeIFArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	model.runCommand("insert-function")
-	for range 5 {
+	for range len(supportedFunctions) {
+		if model.FunctionPicker.selectedFunctionName() == "IF" {
+			break
+		}
 		model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	if got := model.FunctionPicker.Syntax(); got != "IF(condition, true value, false value)" {
