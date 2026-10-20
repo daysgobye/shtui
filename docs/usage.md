@@ -11,6 +11,16 @@ go build -o shtui ./cmd/omasheet
 
 With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook** from the home screen or command palette. Loading and saving run asynchronously. A failed open keeps the current workbook; a failed save keeps it dirty and reports the cause. **Save as** opens a floating picker and proposes the current file's basename with the format's extension. CSV-to-XLSX conversion is available from the save-choice dialog when CSV cannot preserve workbook features.
 
+## Linux file-browser integration
+
+From the repository checkout, run:
+
+```sh
+bash scripts/install.sh
+```
+
+The installer builds `shtui` into `~/.local/bin`, adds a user-level desktop entry that opens the terminal UI, and sets Shtui as the default application for CSV and XLSX files. It requires Go and `xdg-mime`; it does not use `sudo`. Setting CSV as the default may replace the app that currently opens CSV files. Run the script again after updating the checkout to rebuild and refresh the desktop entry.
+
 ## Grid and editing
 
 - Arrow keys move the active cell. Press Enter or type to edit; typing starts with the entered character, including spaces and Unicode.
