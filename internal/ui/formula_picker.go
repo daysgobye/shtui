@@ -39,9 +39,12 @@ var supportedFunctions = []functionDefinition{
 	{name: "SUM", description: "Add numbers in a range", arguments: "range"},
 	{name: "AVERAGE", description: "Average numbers in a range", arguments: "range"},
 	{name: "COUNT", description: "Count numeric cells", arguments: "range"},
+	{name: "COUNTA", description: "Count non-empty cells", arguments: "range"},
+	{name: "COUNTIF", description: "Count cells matching a criterion", arguments: "range, criteria"},
 	{name: "MIN", description: "Smallest number in a range", arguments: "range"},
 	{name: "MAX", description: "Largest number in a range", arguments: "range"},
 	{name: "IF", description: "Choose a value when a condition is true", arguments: "condition, true value, false value"},
+	{name: "IFERROR", description: "Return a fallback when a formula errors", arguments: "value, value_if_error"},
 }
 
 func newFormulaPicker(rangeName, resultCell string) formulaPickerState {
@@ -105,10 +108,8 @@ func (picker *formulaPickerState) HandleKey(message tea.KeyMsg) (submitted, canc
 		picker.Functions, _ = picker.Functions.Update(message)
 		current := picker.selectedFunctionName()
 		if current != previous {
-			if current == "IF" {
+			if isMultiArgumentFunction(current) {
 				picker.RangeInput.SetValue("")
-			}
-			if current == "IF" {
 				picker.RangeInput.Prompt = "Arguments: "
 			} else {
 				picker.RangeInput.Prompt = "Range: "
@@ -152,15 +153,24 @@ func (picker *formulaPickerState) Formula() (string, error) {
 		return "", fmt.Errorf("enter a range or function argument")
 	}
 	switch item.definition.name {
-	case "SUM", "AVERAGE", "COUNT", "MIN", "MAX":
+	case "SUM", "AVERAGE", "COUNT", "COUNTA", "MIN", "MAX":
 		if _, _, _, _, err := parseA1Range(argument); err != nil {
 			return "", fmt.Errorf("invalid range %q: %w", argument, err)
 		}
 		return "=" + item.definition.name + "(" + argument + ")", nil
-	case "IF":
-		return "=IF(" + argument + ")", nil
+	case "IF", "COUNTIF", "IFERROR":
+		return "=" + item.definition.name + "(" + argument + ")", nil
 	default:
 		return "", fmt.Errorf("unsupported function %q", item.definition.name)
+	}
+}
+
+func isMultiArgumentFunction(name string) bool {
+	switch name {
+	case "IF", "COUNTIF", "IFERROR":
+		return true
+	default:
+		return false
 	}
 }
 

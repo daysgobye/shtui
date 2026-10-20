@@ -30,8 +30,8 @@ Improve three observed spreadsheet workflows in Shtui: visible colored borders, 
 ### Workbook formula support
 
 - `COUNT` is already supported and remains available in the function picker.
-- Add `COUNTIF`, `SUMIF`, `IFERROR`, and `COUNTA` to the formula picker and supported-function calculation guard only when the existing Excelize engine produces correct results for each function.
-- Verify `COUNTA` specifically before enabling it; do not introduce a custom formula evaluator or claim support if Excelize cannot calculate it reliably.
+- Add `COUNTIF`, `IFERROR`, and `COUNTA` to the formula picker and supported-function calculation guard only when the existing Excelize engine produces correct results. Keep `SUMIF` unavailable if the engine returns incorrect results.
+- Verify `COUNTA` specifically before enabling it; do not introduce a custom formula evaluator or claim support if Excelize cannot calculate it reliably. The pinned engine returns `60` for `SUMIF(A1:A3,">0",B1:B3)` when A1:A2 are positive numbers, A3 is text, and B1:B3 are 10, 20, and 30; the expected total is `30`, so Shtui must preserve that formula as stale.
 - Ensure the picker exposes the functions' actual arguments, while direct cell/formula-bar entry continues to accept normal formulas.
 - Use the fixture's real formulas as integration cases, including criteria/range references and nested calls. Preserve unsupported formulas as source and continue to surface calculation errors instead of substituting a value.
 - Do not hide a real formula error such as a formula that attempts arithmetic on text.
@@ -57,7 +57,7 @@ Improve three observed spreadsheet workflows in Shtui: visible colored borders, 
 - Border UI no longer offers the six existing preset actions. Choosing a theme or custom color through Border color applies that color to all four edges of every selected cell; the rendered borders are visibly distinguishable from ordinary gridlines and survive XLSX save/reopen. Remove borders remains available and works on the selected range.
 - Quit confirmation is centered, defaults to Nope, responds correctly to mouse and keyboard, cancels without mutation, warns when dirty, and quits immediately on the second Ctrl+C.
 - After an actual confirmed quit, the terminal is restored before the Shtui wordmark and truthful last-action summary are printed. Exercise successful save, new unsaved workbook, added sheet, canceled save, failed save, and quit with no recorded action.
-- The function picker lists supported fixture functions with correct argument prompts. Evaluate fixture formulas using COUNTIF, SUMIF, IFERROR, and COUNTA against expected values; confirm COUNT remains supported. If COUNTA fails the engine verification, omit it from the supported list and report the limitation.
+- The function picker lists supported fixture functions with correct argument prompts. Evaluate COUNTIF, IFERROR, and COUNTA against expected values; confirm COUNT remains supported. Keep SUMIF out of the picker while the pinned engine miscalculates numeric-comparison criteria, and confirm such formulas remain preserved and stale.
 - Reopen the fixture and verify representative formerly stale formula cells recalculate without changing their formula source; verify intentional errors remain errors.
 - Run the relevant Go tests, `go test ./...`, build the native CLI, and smoke the real TUI paths including pointer and keyboard interaction.
 

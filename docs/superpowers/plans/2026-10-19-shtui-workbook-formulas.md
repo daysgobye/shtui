@@ -75,28 +75,28 @@
 - Consumes: Task 1's verified function set, `functionDefinition`, `formulaPickerState.Formula`, and the existing single argument text input.
 - Produces: picker entries and syntax previews for `COUNTIF(range, criteria)`, `IFERROR(value, value_if_error)`, and verified `COUNTA(range)`; generated formula text preserves the user's complete comma-separated arguments. Keep SUMIF out of the picker while Excelize miscalculates numeric criteria.
 
-- [ ] **Step 1: Write failing formula-picker tests**
+- [x] **Step 1: Write failing formula-picker tests**
   - Add `TestFormulaPickerAdditionalFunctions` as table-driven cases: `COUNTIF` with `A1:A3,">0"`; `IFERROR` with `A1/0,"safe"`; `COUNTA` with `A1:A3` only if enabled in Task 1; and existing `COUNT` with `A1:A3`.
   - Assert each function appears in the list, the syntax preview names the correct arguments, and `Formula()` returns the exact `=`-prefixed expression. Assert SUMIF is omitted.
-- [ ] **Step 2: Run focused picker tests and confirm they fail**
+- [x] **Step 2: Run focused picker tests and confirm they fail**
 
   Run: `go test ./internal/ui -run 'TestFormulaPickerAdditionalFunctions' -count=1`
 
   Expected: FAIL because the new functions are absent from the catalog or formula assembly.
-- [ ] **Step 3: Implement function definitions and formula assembly**
+- [x] **Step 3: Implement function definitions and formula assembly**
   - Add descriptions and argument syntax matching the verified calculation functions.
   - For multi-argument functions, accept the entered expression as the function's full argument list rather than passing it through the single-range parser; retain range validation for existing one-range functions.
   - Keep the picker preview synchronized with the exact generated formula and omit COUNTA if Task 1 did not enable it.
-- [ ] **Step 4: Update formula usage documentation**
+- [x] **Step 4: Update formula usage documentation**
   - Update `docs/usage.md` to list the additional verified functions and give examples for COUNTIF and IFERROR; document that numeric-criteria SUMIF is kept stale because the pinned engine returns an incorrect total. Retain the warning that Excelize support is not full Excel compatibility.
-- [ ] **Step 5: Run picker and workbook integration checks**
+- [x] **Step 5: Run picker and workbook integration checks**
 
-  Run: `go test ./internal/ui -run 'TestFormulaPickerAdditionalFunctions' -count=1 && go test ./internal/workbook -run 'TestAdditionalFormulaFunctions|TestNestedSupportedFunctionsRecalculate' -count=1`
+  Run: `go test ./internal/ui -run 'TestFormulaPickerAdditionalFunctions' -count=1 && go test ./internal/workbook -run 'TestAdditionalFormulaFunctions|TestNestedSupportedFunctionsRecalculate|TestUnreliableSumIfRemainsStale' -count=1`
 
   Expected: PASS; picker output matches formulas that the workbook layer recalculates correctly.
 
   Then use a throwaway Go smoke program to open `test_sheets/Cozy_Bullet_Journal_Render_Test.xlsx`, recalculate representative supported formulas, and assert the formula source remains unchanged and the calculation state is current where Excelize supports it. Confirm numeric-criteria SUMIF remains stale rather than reporting its wrong total. Remove the program after the run; record any remaining fixture formula errors instead of hiding them.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add internal/ui/formula_picker.go internal/ui/formula_picker_test.go docs/usage.md
