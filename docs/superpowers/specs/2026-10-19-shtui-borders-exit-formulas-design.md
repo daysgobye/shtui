@@ -1,6 +1,6 @@
 # Shtui Borders, Exit Flow, and Workbook Formula Design
 
-**Status:** Draft for user review  
+**Status:** Approved for implementation planning  
 **Date:** 2026-10-19
 
 ## Goal
