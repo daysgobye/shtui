@@ -41,3 +41,9 @@ Ctrl+P opens the centered, searchable command palette over the current sheet. Se
 CSV contains one sheet and has no native styles, merges, formulas, or workbook metadata. Formula source is saved as CSV text; formatting and other-sheet content cannot be represented. After a successful workbook-only change, Shtui briefly shows a corner notice that CSV cannot preserve the feature. When saving, **Save as CSV** exports only the active sheet's cell inputs and drops workbook-only features; **Save as XLSX** converts the live workbook and keeps the supported workbook state; **Cancel** leaves the session unchanged. CSV export does not remove features from the live workbook, so the warning appears again if you save it as CSV later.
 
 XLSX retains workbook content through Excelize, including content not directly editable in the terminal UI when the library can round-trip it. Shtui does not execute macros and does not implement all Excel features. Formula calculation and conditional-format evaluation are limited to the supported subset. Keep backups of workbooks that depend on unsupported Excel features; do not assume every Excel-specific feature is editable or recalculated by Shtui.
+
+## Quitting
+
+The first Ctrl+C opens a centered confirmation dialog; **Nope** is selected by default. Use the arrow keys or Tab and Enter, press Y to quit, or N/Esc to stay. You can also click **Yep!** or **Nope**. A dirty workbook warns that unsaved changes will be lost. Press Ctrl+C again while the dialog is open to quit immediately. Shtui never auto-saves on exit.
+
+After a confirmed quit, the terminal is restored and Shtui prints its wordmark and a summary of the last successful action. Unsaved changes show as **(unsaved)**; untitled workbooks show as **(not saved)**. Canceled or failed saves do not replace the previous successful action.

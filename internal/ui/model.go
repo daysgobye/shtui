@@ -55,6 +55,7 @@ type AppModel struct {
 	themeQuery          func(uint8, time.Duration) (RGB, bool)
 	status              string
 	lastCommand         string
+	actionSummary       string
 	operation           pendingOperation
 	visibleSheet        string
 	filtersDirty        bool
@@ -293,6 +294,7 @@ func (model *AppModel) commitEdit(rowDelta, colDelta int) {
 	if err != nil {
 		return
 	}
+	model.recordActionSummary("Edited workbook")
 	model.filtersDirty = true
 	model.editing = false
 	model.editorInput.Blur()
@@ -422,6 +424,9 @@ func (model *AppModel) handleConditionalDialogAction(action string) {
 		model.ConditionalDialog = conditionalDialogState{}
 		model.status = fmt.Sprintf("Applied %d conditional formatting rule(s)", len(rules))
 		model.showCSVFeatureNotice()
+		if len(rules) > 0 {
+			model.recordActionSummary("Formatted workbook")
+		}
 	}
 }
 
@@ -487,11 +492,19 @@ func (model *AppModel) runCommand(command string) {
 		model.Palette.Show()
 	case "undo":
 		if model.session != nil {
-			model.setStatus(workbook.Undo(model.session))
+			err := workbook.Undo(model.session)
+			model.setStatus(err)
+			if err == nil {
+				model.recordActionSummary("Undid workbook change")
+			}
 		}
 	case "redo":
 		if model.session != nil {
-			model.setStatus(workbook.Redo(model.session))
+			err := workbook.Redo(model.session)
+			model.setStatus(err)
+			if err == nil {
+				model.recordActionSummary("Redid workbook change")
+			}
 		}
 	case "find":
 		model.findMode = true
@@ -516,7 +529,11 @@ func (model *AppModel) runCommand(command string) {
 	case "insert-function":
 		model.FunctionPicker = newFormulaPicker(model.selectedRangeName(), model.defaultFormulaTargetName())
 	case "border-none":
-		model.setStatus(workbook.RemoveBorders(model.session, model.activeSheet().Name, model.selectedRange()))
+		err := workbook.RemoveBorders(model.session, model.activeSheet().Name, model.selectedRange())
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Formatted workbook")
+		}
 	case "toggle-bold":
 		style := model.activeSheet().Cells[model.Grid.Selected].Style
 		style.Bold = !style.Bold
@@ -542,6 +559,7 @@ func (model *AppModel) runCommand(command string) {
 		model.setStatus(err)
 		if err == nil {
 			model.showCSVFeatureNotice()
+			model.recordActionSummary("Added " + name)
 		}
 	case "merge":
 		result, err := workbook.MergeRange(model.session, model.activeSheet().Name, model.selectedRange(), false)
@@ -552,17 +570,30 @@ func (model *AppModel) runCommand(command string) {
 			model.setStatus(err)
 			if err == nil {
 				model.showCSVFeatureNotice()
+				model.recordActionSummary("Merged cells")
 			}
 		}
 	case "unmerge":
-		model.setStatus(workbook.UnmergeRange(model.session, model.activeSheet().Name, model.selectedRange()))
+		err := workbook.UnmergeRange(model.session, model.activeSheet().Name, model.selectedRange())
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Unmerged cells")
+		}
 	case "insert-row":
 		if model.session != nil {
-			model.setStatus(workbook.InsertRows(model.session, model.activeSheet().Name, model.Grid.Selected.Row, 1))
+			err := workbook.InsertRows(model.session, model.activeSheet().Name, model.Grid.Selected.Row, 1)
+			model.setStatus(err)
+			if err == nil {
+				model.recordActionSummary("Inserted row")
+			}
 		}
 	case "insert-column":
 		if model.session != nil {
-			model.setStatus(workbook.InsertColumns(model.session, model.activeSheet().Name, model.Grid.Selected.Col, 1))
+			err := workbook.InsertColumns(model.session, model.activeSheet().Name, model.Grid.Selected.Col, 1)
+			model.setStatus(err)
+			if err == nil {
+				model.recordActionSummary("Inserted column")
+			}
 		}
 	}
 }
@@ -573,6 +604,21 @@ func (model *AppModel) TakeCommand() string {
 	command := model.lastCommand
 	model.lastCommand = ""
 	return command
+}
+
+func (model *AppModel) TakeActionSummary() string {
+	if model == nil {
+		return ""
+	}
+	summary := model.actionSummary
+	model.actionSummary = ""
+	return summary
+}
+
+func (model *AppModel) recordActionSummary(summary string) {
+	if model != nil && summary != "" {
+		model.actionSummary = summary
+	}
 }
 
 func (model *AppModel) selectedRange() workbook.CellRange {
@@ -624,6 +670,7 @@ func (model *AppModel) applyOperation(mode, input string) {
 			model.setStatus(err)
 			if err == nil {
 				model.showCSVFeatureNotice()
+				model.recordActionSummary("Merged cells")
 			}
 		} else {
 			model.status = "Merge cancelled"
@@ -641,7 +688,11 @@ func (model *AppModel) applyOperation(mode, input string) {
 			model.status = "Choose a (ascending), d (descending), or h (no header)"
 			return
 		}
-		model.setStatus(workbook.SortRange(model.session, sheet.Name, selection, model.Grid.Selected.Col-selection.Start.Col, ascending, hasHeader))
+		err := workbook.SortRange(model.session, sheet.Name, selection, model.Grid.Selected.Col-selection.Start.Col, ascending, hasHeader)
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Sorted workbook")
+		}
 		model.filtersDirty = true
 	case "filter":
 		allowed := make(map[string]bool)
@@ -654,11 +705,19 @@ func (model *AppModel) applyOperation(mode, input string) {
 		selection := model.sheetRange()
 		column := model.Grid.Selected.Col - selection.Start.Col
 		if len(allowed) == 0 {
-			model.setStatus(workbook.SetFilter(model.session, sheet.Name, selection, nil))
+			err := workbook.SetFilter(model.session, sheet.Name, selection, nil)
+			model.setStatus(err)
+			if err == nil {
+				model.recordActionSummary("Filtered workbook")
+			}
 			model.filtersDirty = true
 			return
 		}
-		model.setStatus(workbook.SetFilter(model.session, sheet.Name, selection, []workbook.ColumnFilter{{Column: column, AllowedValues: allowed}}))
+		err := workbook.SetFilter(model.session, sheet.Name, selection, []workbook.ColumnFilter{{Column: column, AllowedValues: allowed}})
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Filtered workbook")
+		}
 		model.filtersDirty = true
 	}
 }
@@ -731,6 +790,7 @@ func (model *AppModel) applyBorderColor(colorRGB string) {
 	model.setStatus(err)
 	if err == nil {
 		model.showCSVFeatureNotice()
+		model.recordActionSummary("Formatted workbook")
 	}
 }
 
@@ -765,6 +825,7 @@ func (model *AppModel) applyCellStyle(style workbook.CellStyle) {
 	model.setStatus(err)
 	if err == nil {
 		model.showCSVFeatureNotice()
+		model.recordActionSummary("Formatted workbook")
 	}
 }
 
@@ -1064,6 +1125,7 @@ func (model *AppModel) handleFormulaPickerKey(message tea.KeyMsg) {
 		model.status = err.Error()
 		return
 	}
+	model.recordActionSummary("Edited workbook")
 	model.Grid.Selected = workbook.Coord{Row: targetRow, Col: targetCol}
 	model.Grid.Selection = workbook.CellRange{}
 	model.FunctionPicker = formulaPickerState{}

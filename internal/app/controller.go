@@ -45,6 +45,8 @@ type Controller struct {
 	quitConfirmed   bool
 	pendingSavePath string
 	status          string
+	lastAction      string
+	lastActionPath  string
 	width           int
 	height          int
 }
@@ -161,6 +163,8 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		controller.path = message.path
 		controller.view = controller.newView(message.session)
 		controller.status = ""
+		controller.lastAction = "Opened workbook"
+		controller.lastActionPath = message.path
 		if old != nil && old != message.session {
 			_ = old.Close()
 		}
@@ -173,6 +177,8 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			controller.path = message.path
 			controller.status = fmt.Sprintf("Saved %s", message.path)
+			controller.lastAction = "Saved workbook"
+			controller.lastActionPath = message.path
 		}
 		return controller, nil
 	case tea.KeyMsg:
@@ -201,6 +207,7 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		_, command := controller.view.Update(message)
+		controller.recordViewActionSummary()
 		action := controller.view.TakeCommand()
 		return controller, controller.handleAction(action, command)
 	case tea.MouseMsg:
@@ -211,10 +218,12 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return controller, nil
 		}
 		_, command := controller.view.Update(message)
+		controller.recordViewActionSummary()
 		action := controller.view.TakeCommand()
 		return controller, controller.handleAction(action, command)
 	default:
 		_, command := controller.view.Update(message)
+		controller.recordViewActionSummary()
 		return controller, command
 	}
 }
@@ -576,7 +585,9 @@ func (controller *Controller) newWorkbook(format workbook.Format) {
 	controller.session = session
 	controller.path = ""
 	controller.view = controller.newView(session)
-	controller.status = "New " + string(format) + " workbook"
+	controller.status = "New " + strings.ToUpper(string(format)) + " workbook"
+	controller.lastAction = "New " + strings.ToUpper(string(format)) + " workbook"
+	controller.lastActionPath = ""
 	if old != nil {
 		_ = old.Close()
 	}
@@ -587,13 +598,61 @@ func (controller *Controller) newView(session *workbook.Session) ui.AppModel {
 	return view
 }
 
+func (controller *Controller) recordViewActionSummary() {
+	if summary := controller.view.TakeActionSummary(); summary != "" {
+		controller.lastAction = summary
+		controller.lastActionPath = controller.path
+	}
+}
+
+func (controller *Controller) exitSummary() string {
+	if controller == nil || controller.lastAction == "" {
+		return "Thanks for using Shtui."
+	}
+	summary := controller.lastAction
+	switch {
+	case summary == "Saved workbook", summary == "Opened workbook", summary == "Edited workbook":
+		if controller.lastActionPath != "" {
+			summary += ": " + controller.lastActionPath
+		}
+	case strings.HasPrefix(summary, "Added "):
+		if controller.lastActionPath != "" {
+			summary += " to " + controller.lastActionPath
+		}
+	default:
+		if controller.lastActionPath != "" {
+			summary += ": " + controller.lastActionPath
+		}
+	}
+	if controller.lastActionPath == "" {
+		summary += " (not saved)"
+	} else if controller.session != nil && controller.session.Workbook != nil && controller.session.Workbook.Dirty {
+		summary += " (unsaved)"
+	}
+	return summary
+}
+
+func formatExitSummary(confirmed bool, runErr error, summary string) string {
+	if !confirmed || runErr != nil || summary == "" {
+		return ""
+	}
+	wordmark := lipgloss.NewStyle().Foreground(ui.ANSIColor(5)).Bold(true).Render("SHTUI")
+	return "\n" + wordmark + "\n" + summary + "\n"
+}
+
 func Run(ctx context.Context, path string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	program := tea.NewProgram(NewController(path), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
+	controller := NewController(path)
+	program := tea.NewProgram(controller, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("run terminal app: %w", err)
+	}
+	if output := formatExitSummary(controller.quitConfirmed, nil, controller.exitSummary()); output != "" {
+		if _, err := fmt.Fprint(os.Stdout, output); err != nil {
+			return fmt.Errorf("print exit summary: %w", err)
+		}
 	}
 	return nil
 }

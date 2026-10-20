@@ -56,7 +56,7 @@
   Run: `go test ./internal/app -run 'TestQuitConfirmation' -count=1`
 
   Expected: PASS; default focus is Nope, keyboard and mouse agree, dirty warning is accurate, and the double-Ctrl+C bypass is immediate.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `e28fec8` (`feat(app): confirm quit with keyboard and mouse`)
 
   ```bash
   git add internal/app/quit_dialog.go internal/app/controller.go internal/app/controller_test.go internal/ui/model.go docs/superpowers/plans/2026-10-19-shtui-quit-summary.md
@@ -72,29 +72,29 @@
 - Consumes: Task 1's confirmed-quit state, `saveCompleteMsg`, `newWorkbook`, successful UI mutation paths, `tea.Program.Run`, and `Workbook.Dirty`.
 - Produces: `AppModel.TakeActionSummary() string` for successful workbook actions, `Controller.exitSummary() string`, and post-Run output gated on confirmed quit.
 
-- [ ] **Step 1: Write failing action-summary tests**
+- [x] **Step 1: Write failing action-summary tests**
   - Add `TestExitSummaryNewAndAddedSheet`: a new unsaved CSV workbook reports that it is not saved; adding Sheet2 to a saved path reports the path and `(unsaved)`.
   - Add `TestExitSummarySaveAndLaterEdits`: successful save reports the destination; later edits mark the summary unsaved rather than implying they were saved.
   - Add `TestExitSummaryIgnoresFailedOrCanceledSave`: a failed save or canceled save choice never replaces a prior successful action with a false Saved message.
   - Add `TestRunPrintsSummaryOnlyAfterConfirmedQuit` around a testable post-Run formatter/print helper; assert no summary for context cancellation and summary text after confirmation.
-- [ ] **Step 2: Run focused tests and confirm they fail**
+- [x] **Step 2: Run focused tests and confirm they fail**
 
   Run: `go test ./internal/app -run 'TestExitSummary|TestRunPrintsSummary' -count=1`
 
   Expected: FAIL because Run currently discards the returned model and prints no summary.
-- [ ] **Step 3: Track successful actions and print after terminal restoration**
+- [x] **Step 3: Track successful actions and print after terminal restoration**
   - Have the UI expose successful action summaries for edits and workbook commands; drain them in Controller after UI updates. Controller records successful open/create/save events and only records Saved after `saveCompleteMsg.err == nil`.
   - Derive the unsaved suffix from `Workbook.Dirty`; include the workbook path when known and identify untitled workbooks as not saved.
   - Retain the `Controller` passed to `tea.NewProgram`; after `program.Run()` returns successfully, print a compact Shtui wordmark and `exitSummary()` only if quit was confirmed. Keep errors/context cancellation from being reported as a user-confirmed quit.
   - Update `docs/usage.md` with the first-Ctrl+C, second-Ctrl+C, mouse, and post-exit summary behavior.
-- [ ] **Step 4: Run focused app tests and native TUI smoke**
+- [x] **Step 4: Run focused app tests and native TUI smoke**
 
   Run: `go test ./internal/app -run 'TestQuitConfirmation|TestExitSummary|TestRunPrintsSummary' -count=1`
 
   Expected: PASS; output is gated on confirmed quit and accurately distinguishes saved, unsaved, and canceled/failed operations. Then launch the native app in a PTY, test Nope by mouse and keyboard, Yep by mouse and keyboard, double Ctrl+C, and observe that the logo/summary appears after the alternate screen exits.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
-  git add internal/ui/model.go internal/app/controller.go internal/app/controller_test.go docs/usage.md
+  git add internal/ui/model.go internal/app/controller.go internal/app/controller_test.go docs/usage.md docs/superpowers/plans/2026-10-19-shtui-quit-summary.md
   git commit -m "feat(app): print workbook session summary on exit"
   ```

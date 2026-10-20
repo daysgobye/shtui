@@ -182,6 +182,9 @@ func TestPathLaunchOpensSelectedFormat(t *testing.T) {
 	if controller.session == nil || controller.session.Format != workbook.CSV {
 		t.Fatalf("loaded session = %#v; want CSV", controller.session)
 	}
+	if got, want := controller.exitSummary(), "Opened workbook: "+path; got != want {
+		t.Fatalf("opened workbook summary = %q, want %q", got, want)
+	}
 	if !strings.Contains(controller.View(), "pear") {
 		t.Fatal("loaded CSV is not visible in the TUI")
 	}
@@ -677,5 +680,107 @@ func openPicker(t *testing.T, controller *Controller, directory string) {
 	}
 	if message := command(); message != nil {
 		controller.Update(message)
+	}
+}
+
+func TestExitSummaryNewAndAddedSheet(t *testing.T) {
+	if got, want := NewController("").exitSummary(), "Thanks for using Shtui."; got != want {
+		t.Fatalf("neutral exit summary = %q, want %q", got, want)
+	}
+	newBook := NewController("")
+	newBook.newWorkbook(workbook.CSV)
+	t.Cleanup(func() {
+		if newBook.session != nil {
+			_ = newBook.session.Close()
+		}
+	})
+	if got, want := newBook.exitSummary(), "New CSV workbook (not saved)"; got != want {
+		t.Fatalf("new workbook summary = %q, want %q", got, want)
+	}
+
+	path := filepath.Join(t.TempDir(), "saved.xlsx")
+	session, err := workbook.NewWorkbook(workbook.XLSX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SaveFile(session, path); err != nil {
+		t.Fatal(err)
+	}
+	added := NewController("")
+	added.session, added.path, added.view = session, path, added.newView(session)
+	t.Cleanup(func() { _ = session.Close() })
+	added.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	added.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("add sheet")})
+	added.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	want := "Added Sheet2 to " + path + " (unsaved)"
+	if got := added.exitSummary(); got != want {
+		t.Fatalf("added sheet summary = %q, want %q", got, want)
+	}
+}
+
+func TestExitSummarySaveAndLaterEdits(t *testing.T) {
+	controller := NewController("")
+	controller.newWorkbook(workbook.CSV)
+	t.Cleanup(func() { _ = controller.session.Close() })
+	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("before save")})
+	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := controller.exitSummary(); !strings.Contains(got, "(not saved)") {
+		t.Fatalf("edited new workbook summary = %q, want not-saved state", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "saved.csv")
+	controller.Update(controller.saveCmd(path)())
+	wantSaved := "Saved workbook: " + path
+	if got := controller.exitSummary(); got != wantSaved {
+		t.Fatalf("successful save summary = %q, want %q", got, wantSaved)
+	}
+	controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("after save")})
+	controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	wantEdited := "Edited workbook: " + path + " (unsaved)"
+	if got := controller.exitSummary(); got != wantEdited {
+		t.Fatalf("post-save edit summary = %q, want %q", got, wantEdited)
+	}
+}
+
+func TestExitSummaryIgnoresFailedOrCanceledSave(t *testing.T) {
+	controller := NewController("")
+	controller.newWorkbook(workbook.CSV)
+	t.Cleanup(func() { _ = controller.session.Close() })
+	want := controller.exitSummary()
+	controller.Update(saveCompleteMsg{path: filepath.Join(t.TempDir(), "failed.csv"), err: os.ErrPermission})
+	if got := controller.exitSummary(); got != want {
+		t.Fatalf("failed save changed summary from %q to %q", want, got)
+	}
+
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !controller.pickerOpen {
+		t.Fatal("save from an untitled workbook did not open a picker")
+	}
+	controller.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := controller.exitSummary(); got != want {
+		t.Fatalf("canceled save changed summary from %q to %q", want, got)
+	}
+}
+
+func TestRunPrintsSummaryOnlyAfterConfirmedQuit(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		confirmed bool
+		runErr    error
+		wantText  bool
+	}{
+		{name: "context cancellation"},
+		{name: "run error", confirmed: true, runErr: os.ErrClosed},
+		{name: "confirmed quit", confirmed: true, wantText: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := formatExitSummary(test.confirmed, test.runErr, "Saved workbook: /tmp/book.xlsx")
+			if got := strings.Contains(ansi.Strip(output), "Saved workbook: /tmp/book.xlsx"); got != test.wantText {
+				t.Fatalf("summary output = %q, contains summary=%t want %t", ansi.Strip(output), got, test.wantText)
+			}
+			if test.wantText && !strings.Contains(ansi.Strip(output), "SHTUI") {
+				t.Fatalf("confirmed summary lacks SHTUI wordmark: %q", ansi.Strip(output))
+			}
+		})
 	}
 }
