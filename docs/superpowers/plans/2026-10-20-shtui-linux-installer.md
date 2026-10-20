@@ -23,7 +23,7 @@
 
 ## Review Focus
 
-- Home/XDG paths containing spaces must produce a correctly quoted absolute `Exec` command. Test with a temporary home path containing spaces.
+- Home/XDG paths containing spaces or literal `%` must produce a correctly quoted absolute `Exec` command; `%` in the executable path must be doubled so it is not interpreted as a field code. Test with a temporary path containing spaces and `%f`.
 - A failed Go build must preserve an existing installed binary. Test with a failing `go` stub and compare the old binary contents.
 - An `xdg-mime` failure must stop installation and must not print a success message. Test with a failing `xdg-mime` stub.
 - Re-running installation must not duplicate MIME declarations or leave duplicate desktop entries. Run twice and inspect the generated entry and target paths.
@@ -44,7 +44,7 @@
 - Desktop command: quoted absolute installed executable followed by `%f`; `Terminal=true`.
 - Defaults: `text/csv` and `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` map to `shtui.desktop`.
 
-- [x] **Step 1: Write `scripts/install_test.sh` first.** Make it create a temporary home and XDG directories whose paths include spaces, run the real installer/build and actual `xdg-mime`, and query both defaults from the isolated config directory. Assert the installed binary is executable; the desktop file has `Type=Application`, `Terminal=true`, the escaped absolute `Exec` plus `%f`, and exactly the two MIME types. Run installation a second time and verify one desktop entry and no duplicate MIME declaration.
+- [x] **Step 1: Write `scripts/install_test.sh` first.** Make it create a temporary home and XDG directories whose paths include spaces and `%f`, run the real installer/build and actual `xdg-mime`, and query both defaults from the isolated config directory. Assert the installed binary is executable; the desktop file has `Type=Application`, `Terminal=true`, the correctly escaped absolute `Exec` plus one final `%f`, and exactly the two MIME types. Run installation a second time and verify one desktop entry and no duplicate MIME declaration.
 - [x] **Step 2: Run `bash scripts/install_test.sh` before adding the installer.** Expected: fail because `scripts/install.sh` is absent, confirming the test exercises the missing behavior.
 - [x] **Step 3: Implement `scripts/install.sh`.** Resolve the checkout root from the script path; require `go` and `xdg-mime`; build to a temporary file in `~/.local/bin` and atomically rename it after a successful build; write the desktop entry atomically under `${XDG_DATA_HOME:-$HOME/.local/share}/applications`; safely quote the executable path; set both MIME defaults; run `update-desktop-database` if available; print paths and configured types only after success; clean temporary files on exit.
 - [x] **Step 4: Extend `scripts/install_test.sh` for the Review Focus cases.** Test failed Go build preserves an existing binary, failed `xdg-mime` exits without a success message, and absence of `update-desktop-database` remains non-fatal while real `xdg-mime` defaults are set. Use stubs only for external-command failure cases; inspect the generated desktop entry and actual installed file behavior.

@@ -54,6 +54,9 @@ escape_exec_arg() {
     char=${input:0:1}
     input=${input:1}
     case "$char" in
+      %)
+        escaped+='%%'
+        ;;
       \\|\"|\$|\`)
         escaped+="\\$char"
         ;;

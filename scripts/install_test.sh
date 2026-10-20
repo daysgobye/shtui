@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export HOME="$tmp/home with spaces"
+export HOME="$tmp/home with %f spaces"
 export GOMODCACHE="$real_gomodcache"
 export GOCACHE="$real_gocache"
 export XDG_DATA_HOME="$HOME/xdg data"
@@ -48,7 +48,8 @@ run_install
 [ -x "$binary" ] || fail "installed binary is not executable"
 assert_file_contains "$desktop_file" 'Type=Application'
 assert_file_contains "$desktop_file" 'Terminal=true'
-assert_file_contains "$desktop_file" "Exec=\"$binary\" %f"
+escaped_binary=${binary//%/%%}
+assert_file_contains "$desktop_file" "Exec=\"$escaped_binary\" %f"
 assert_file_contains "$desktop_file" 'MimeType=text/csv;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;'
 if command -v desktop-file-validate >/dev/null 2>&1; then
   desktop-file-validate "$desktop_file"
