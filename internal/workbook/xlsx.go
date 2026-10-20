@@ -1,8 +1,12 @@
 package workbook
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -10,6 +14,10 @@ import (
 )
 
 func workbookFromExcelize(file *excelize.File, path string, format Format) (*Workbook, error) {
+	styledCellRefs, err := styledCellReferences(file)
+	if err != nil {
+		return nil, fmt.Errorf("read styled cell references: %w", err)
+	}
 	workbook := &Workbook{Format: format, Path: path}
 	for _, sheetName := range file.GetSheetList() {
 		rows, err := file.GetRows(sheetName)
@@ -57,6 +65,38 @@ func workbookFromExcelize(file *excelize.File, path string, format Format) (*Wor
 				sheet.Cells[Coord{Row: rowIndex, Col: colIndex}] = cell
 			}
 		}
+		for _, cellName := range styledCellRefs[sheetName] {
+			column, row, err := excelize.CellNameToCoordinates(cellName)
+			if err != nil {
+				return nil, fmt.Errorf("address styled cell %s!%s: %w", sheetName, cellName, err)
+			}
+			coord := Coord{Row: row - 1, Col: column - 1}
+			if _, exists := sheet.Cells[coord]; exists {
+				continue
+			}
+			styleID, err := file.GetCellStyle(sheetName, cellName)
+			if err != nil {
+				return nil, fmt.Errorf("read style %s!%s: %w", sheetName, cellName, err)
+			}
+			if styleID == 0 {
+				continue
+			}
+			cellStyle, cached := styleCache[styleID]
+			if !cached {
+				style, err := file.GetStyle(styleID)
+				if err != nil {
+					return nil, fmt.Errorf("read style definition %s!%s: %w", sheetName, cellName, err)
+				}
+				cellStyle = styleFromExcelize(style)
+				styleCache[styleID] = cellStyle
+			}
+			if !hasCellStyle(cellStyle) {
+				continue
+			}
+			sheet.Cells[coord] = Cell{Style: cellStyle, CalculationState: Literal}
+			sheet.Rows = max(sheet.Rows, row)
+			sheet.Cols = max(sheet.Cols, column)
+		}
 		for col := range sheet.Cols {
 			columnName, err := excelize.ColumnNumberToName(col + 1)
 			if err != nil {
@@ -96,6 +136,123 @@ func workbookFromExcelize(file *excelize.File, path string, format Format) (*Wor
 		return nil, fmt.Errorf("workbook %q contains no worksheets", path)
 	}
 	return workbook, nil
+}
+
+func styledCellReferences(file *excelize.File) (map[string][]string, error) {
+	workbookData, ok := excelizePackagePart(file, "xl/workbook.xml")
+	if !ok {
+		return nil, nil
+	}
+	var workbookXML struct {
+		Sheets struct {
+			Items []struct {
+				Name string `xml:"name,attr"`
+				Rel  string `xml:"http://schemas.openxmlformats.org/officeDocument/2006/relationships id,attr"`
+			} `xml:"sheet"`
+		} `xml:"sheets"`
+	}
+	if err := xml.Unmarshal(workbookData, &workbookXML); err != nil {
+		return nil, fmt.Errorf("decode workbook XML: %w", err)
+	}
+	relationshipData, ok := excelizePackagePart(file, "xl/_rels/workbook.xml.rels")
+	if !ok {
+		return nil, nil
+	}
+	var relationshipsXML struct {
+		Items []struct {
+			ID     string `xml:"Id,attr"`
+			Target string `xml:"Target,attr"`
+			Type   string `xml:"Type,attr"`
+		} `xml:"Relationship"`
+	}
+	if err := xml.Unmarshal(relationshipData, &relationshipsXML); err != nil {
+		return nil, fmt.Errorf("decode workbook relationships: %w", err)
+	}
+	relationships := make(map[string]struct {
+		target string
+		kind   string
+	}, len(relationshipsXML.Items))
+	for _, relationship := range relationshipsXML.Items {
+		relationships[relationship.ID] = struct {
+			target string
+			kind   string
+		}{target: relationship.Target, kind: relationship.Type}
+	}
+	result := make(map[string][]string)
+	for _, sheet := range workbookXML.Sheets.Items {
+		relationship, exists := relationships[sheet.Rel]
+		if !exists || !strings.HasSuffix(relationship.kind, "/worksheet") {
+			continue
+		}
+		target := strings.TrimPrefix(strings.TrimSpace(relationship.target), "/")
+		if !strings.HasPrefix(target, "xl/") {
+			target = path.Join("xl", target)
+		}
+		target = path.Clean(target)
+		if !strings.HasPrefix(target, "xl/worksheets/") || !strings.HasSuffix(target, ".xml") {
+			continue
+		}
+		worksheetData, ok := excelizePackagePart(file, target)
+		if !ok {
+			continue
+		}
+		references, err := styledCellReferencesFromWorksheet(worksheetData)
+		if err != nil {
+			return nil, fmt.Errorf("decode worksheet %q: %w", sheet.Name, err)
+		}
+		result[sheet.Name] = append(result[sheet.Name], references...)
+	}
+	return result, nil
+}
+
+func styledCellReferencesFromWorksheet(data []byte) ([]string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	references := make([]string, 0)
+	inSheetData := false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return references, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			if token.Name.Local == "sheetData" {
+				inSheetData = true
+				continue
+			}
+			if !inSheetData || token.Name.Local != "c" {
+				continue
+			}
+			var reference, style string
+			for _, attribute := range token.Attr {
+				switch attribute.Name.Local {
+				case "r":
+					reference = attribute.Value
+				case "s":
+					style = attribute.Value
+				}
+			}
+			if reference != "" && style != "" && style != "0" {
+				references = append(references, reference)
+			}
+		case xml.EndElement:
+			if token.Name.Local == "sheetData" {
+				inSheetData = false
+			}
+		}
+	}
+}
+
+func excelizePackagePart(file *excelize.File, name string) ([]byte, bool) {
+	value, ok := file.Pkg.Load(name)
+	if !ok {
+		return nil, false
+	}
+	data, ok := value.([]byte)
+	return data, ok
 }
 
 func loadConditionalRules(file *excelize.File, sheetName string) ([]ConditionalRule, error) {

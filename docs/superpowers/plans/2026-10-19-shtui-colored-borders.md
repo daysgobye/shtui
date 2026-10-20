@@ -30,26 +30,27 @@
 ### Task 1: Add colored all-edge and remove-border workbook operations
 
 **Files:**
-- Modify: `internal/workbook/styles.go`
+- Modify: `internal/workbook/styles.go`, `internal/workbook/xlsx.go`
 - Modify: `internal/workbook/styles_test.go`
 
 **Interfaces:**
 - Consumes: `CellStyle.Borders`, `BorderStyle`, `applyStyledCellStates`, and existing undo/redo history.
 - Produces: `ApplyBorderColor(session *Session, sheetName string, selection CellRange, colorRGB string) error` and `RemoveBorders(session *Session, sheetName string, selection CellRange) error`.
 
-- [ ] **Step 1: Write failing workbook-operation tests**
-  - Add `TestApplyBorderColorAppliesAllEdgesToSelection`: apply `112233` to a 2×2 selection and assert all four edges on all four cells are thin and have that RGB value; assert pre-existing fill, font, number format, and input remain unchanged.
+- [x] **Step 1: Write failing workbook-operation tests**
+  - Add `TestApplyBorderColorAppliesAllEdgesToSelection`: apply `112233` to a 2×2 selection and assert all four edges on all four cells are thin and have that RGB value; assert pre-existing fill, font, number format, and input remain unchanged; save and reopen the XLSX and assert all four borders on all four cells are still present.
   - Add `TestRemoveBordersSelectedRangeAndHistory`: apply borders to two separated cells, remove borders from only one, assert the other remains bordered, then assert Undo and Redo restore the expected edges.
-- [ ] **Step 2: Run the focused tests and confirm they fail**
+- [x] **Step 2: Run the focused tests and confirm they fail**
 
   Run: `go test ./internal/workbook -run 'TestApplyBorderColorAppliesAllEdgesToSelection|TestRemoveBordersSelectedRangeAndHistory' -count=1`
 
   Expected: FAIL because no color-aware all-edge operation exists.
-- [ ] **Step 3: Implement the two workbook operations**
+- [x] **Step 3: Implement the two workbook operations**
   - Add `ApplyBorderColor` using the existing per-cell state/history path; set each edge to thin with `ColorRGB: colorRGB` for every coordinate in the selection.
   - Add `RemoveBorders` using the same history path and clear only the four edge values, preserving the remaining style fields.
-  - Remove obsolete `ApplyBorderPreset` after checking its references with `xd://lsp`; do not retain the preset API as a compatibility shim.
-- [ ] **Step 4: Run focused workbook tests**
+  - Extend `workbookFromExcelize` to enumerate styled blank-cell references from Excelize's in-memory worksheet package parts, because `GetRows` omits empty styled cells; include those styles in the workbook model and update its used row/column dimensions.
+  - Keep `ApplyBorderPreset` temporarily so the current UI caller remains buildable. Remove the obsolete exported API in Task 2 after the UI commands are migrated; do not retain it as a compatibility shim.
+- [x] **Step 4: Run focused workbook tests**
 
   Run: `go test ./internal/workbook -run 'TestApplyBorderColor|TestRemoveBorders|TestUndoStyle' -count=1`
 
@@ -57,14 +58,14 @@
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add internal/workbook/styles.go internal/workbook/styles_test.go
+  git add internal/workbook/styles.go internal/workbook/xlsx.go internal/workbook/styles_test.go
   git commit -m "feat(workbook): apply colored cell borders"
   ```
 
 ### Task 2: Replace border presets with the color-picker action
 
 **Files:**
-- Modify: `internal/ui/model.go`, `internal/ui/command_palette.go`, `internal/ui/toolbar.go`, `internal/ui/model_test.go`, `internal/ui/command_palette_test.go`, `docs/usage.md`
+- Modify: `internal/ui/model.go`, `internal/ui/command_palette.go`, `internal/ui/toolbar.go`, `internal/ui/model_test.go`, `internal/ui/command_palette_test.go`, `internal/workbook/styles.go`, `docs/usage.md`
 
 **Interfaces:**
 - Consumes: Task 1's `ApplyBorderColor` and `RemoveBorders`, plus existing `openColorPicker`, `ThemePalette`, `selectedRange`, and CSV notice behavior.

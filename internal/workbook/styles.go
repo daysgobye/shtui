@@ -69,7 +69,19 @@ func ApplyStyle(session *Session, sheetName string, selection CellRange, style C
 	return nil
 }
 
-// ApplyBorderPreset changes border edges for a range without replacing other cell formatting.
+// ApplyBorderColor applies thin borders with one color to all edges of a range.
+func ApplyBorderColor(session *Session, sheetName string, selection CellRange, colorRGB string) error {
+	thin := BorderStyle{Preset: "thin", ColorRGB: colorRGB}
+	return applyBorderSet(session, sheetName, selection, BorderSet{
+		Top: thin, Right: thin, Bottom: thin, Left: thin,
+	})
+}
+
+// RemoveBorders clears all border edges in a range without replacing other cell formatting.
+func RemoveBorders(session *Session, sheetName string, selection CellRange) error {
+	return applyBorderSet(session, sheetName, selection, BorderSet{})
+}
+// ApplyBorderPreset keeps existing callers working until the UI preset commands are removed.
 func ApplyBorderPreset(session *Session, sheetName string, selection CellRange, preset string) error {
 	if session == nil || session.Workbook == nil {
 		return fmt.Errorf("apply border preset: session is nil")
@@ -128,6 +140,45 @@ func ApplyBorderPreset(session *Session, sheetName string, selection CellRange, 
 			case "none":
 				borders = BorderSet{}
 			}
+			updated.Style.Borders = borders
+			before[coord] = old
+			after[coord] = cellState{cell: updated, exists: updated.Input != "" || hasCellStyle(updated.Style)}
+		}
+	}
+	if err := applyStyledCellStates(session, sheetName, after); err != nil {
+		_ = applyStyledCellStates(session, sheetName, before)
+		return err
+	}
+	recordHistory(session, historyEntry{
+		undo: func() error { return applyStyledCellStates(session, sheetName, before) },
+		redo: func() error { return applyStyledCellStates(session, sheetName, after) },
+	})
+	return nil
+}
+
+
+func applyBorderSet(session *Session, sheetName string, selection CellRange, borders BorderSet) error {
+	if session == nil || session.Workbook == nil {
+		return fmt.Errorf("apply borders: session is nil")
+	}
+	if err := validateCellRange(selection); err != nil {
+		return fmt.Errorf("apply borders: %w", err)
+	}
+	idx, exists := sheetIndex(session.Workbook, sheetName)
+	if !exists {
+		return fmt.Errorf("apply borders: sheet %q does not exist", sheetName)
+	}
+	if err := ensureCalculationFile(session); err != nil {
+		return err
+	}
+	before := make(map[Coord]cellState)
+	after := make(map[Coord]cellState)
+	sheet := &session.Workbook.Sheets[idx]
+	for row := selection.Start.Row; row <= selection.End.Row; row++ {
+		for col := selection.Start.Col; col <= selection.End.Col; col++ {
+			coord := Coord{Row: row, Col: col}
+			old := cellStateAt(sheet, coord)
+			updated := old.cell
 			updated.Style.Borders = borders
 			before[coord] = old
 			after[coord] = cellState{cell: updated, exists: updated.Input != "" || hasCellStyle(updated.Style)}

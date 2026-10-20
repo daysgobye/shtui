@@ -184,3 +184,95 @@ func TestUndoStyleAndMerge(t *testing.T) {
 		t.Fatal("redo did not restore style and merge")
 	}
 }
+
+func TestApplyBorderColorAppliesAllEdgesToSelection(t *testing.T) {
+	session := newOperationSession(t)
+	selection := CellRange{Start: Coord{}, End: Coord{Row: 1, Col: 1}}
+	input := "keep input"
+	if err := SetCell(session, CellAddress{Sheet: "Sheet1"}, input); err != nil {
+		t.Fatalf("SetCell: %v", err)
+	}
+	style := CellStyle{
+		FillRGB: "AABBCC", FontRGB: "112244", NumberFormat: "0.00", Bold: true,
+		Borders: BorderSet{Top: BorderStyle{Preset: "double", ColorRGB: "ABCDEF"}},
+	}
+	if err := ApplyStyle(session, "Sheet1", CellRange{Start: Coord{}, End: Coord{}}, style); err != nil {
+		t.Fatalf("ApplyStyle: %v", err)
+	}
+
+	if err := ApplyBorderColor(session, "Sheet1", selection, "112233"); err != nil {
+		t.Fatalf("ApplyBorderColor: %v", err)
+	}
+
+	want := BorderStyle{Preset: "thin", ColorRGB: "112233"}
+	for row := 0; row <= 1; row++ {
+		for col := 0; col <= 1; col++ {
+			cell := session.Workbook.Sheets[0].Cells[Coord{Row: row, Col: col}]
+			for side, border := range map[string]BorderStyle{
+				"top": cell.Style.Borders.Top, "right": cell.Style.Borders.Right,
+				"bottom": cell.Style.Borders.Bottom, "left": cell.Style.Borders.Left,
+			} {
+				if border != want {
+					t.Errorf("%s%d %s border = %#v, want %#v", string(rune('A'+col)), row+1, side, border, want)
+				}
+			}
+		}
+	}
+	cell := session.Workbook.Sheets[0].Cells[Coord{}]
+	if cell.Input != input || cell.Style.FillRGB != style.FillRGB || cell.Style.FontRGB != style.FontRGB || cell.Style.NumberFormat != style.NumberFormat || !cell.Style.Bold {
+		t.Fatalf("border application changed unrelated cell state: %#v", cell)
+	}
+	path := t.TempDir() + "/colored.xlsx"
+	if err := SaveFile(session, path); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	reopened, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer reopened.Close()
+	for row := 0; row <= 1; row++ {
+		for col := 0; col <= 1; col++ {
+			borders := reopened.Workbook.Sheets[0].Cells[Coord{Row: row, Col: col}].Style.Borders
+			if borders.Top != want || borders.Right != want || borders.Bottom != want || borders.Left != want {
+				t.Errorf("reopened borders at row %d col %d = %#v, want all edges %#v", row, col, borders, want)
+			}
+		}
+	}
+
+}
+
+func TestRemoveBordersSelectedRangeAndHistory(t *testing.T) {
+	session := newOperationSession(t)
+	first := CellRange{Start: Coord{}, End: Coord{}}
+	other := CellRange{Start: Coord{Col: 2}, End: Coord{Col: 2}}
+	if err := ApplyBorderColor(session, "Sheet1", first, "112233"); err != nil {
+		t.Fatalf("ApplyBorderColor first: %v", err)
+	}
+	if err := ApplyBorderColor(session, "Sheet1", other, "445566"); err != nil {
+		t.Fatalf("ApplyBorderColor other: %v", err)
+	}
+
+	if err := RemoveBorders(session, "Sheet1", first); err != nil {
+		t.Fatalf("RemoveBorders: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{}].Style.Borders; got != (BorderSet{}) {
+		t.Fatalf("removed cell borders = %#v, want empty", got)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{Col: 2}].Style.Borders.Left.ColorRGB; got != "445566" {
+		t.Fatalf("unselected border color = %q, want 445566", got)
+	}
+
+	if err := Undo(session); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{}].Style.Borders.Top.ColorRGB; got != "112233" {
+		t.Fatalf("undo restored border color = %q, want 112233", got)
+	}
+	if err := Redo(session); err != nil {
+		t.Fatalf("Redo: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{}].Style.Borders; got != (BorderSet{}) {
+		t.Fatalf("redo borders = %#v, want empty", got)
+	}
+}
