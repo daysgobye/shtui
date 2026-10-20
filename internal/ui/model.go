@@ -101,9 +101,6 @@ func (model *AppModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		model.handleMouse(message)
 	case tea.KeyMsg:
-		if message.Type == tea.KeyCtrlC {
-			return model, tea.Quit
-		}
 		model.handleKey(message)
 	case csvNoticeExpiredMsg:
 		if message.generation == model.csvNoticeGeneration {

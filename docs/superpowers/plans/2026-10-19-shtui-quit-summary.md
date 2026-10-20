@@ -32,26 +32,26 @@
 
 **Files:**
 - Create: `internal/app/quit_dialog.go`
-- Modify: `internal/app/controller.go`, `internal/app/controller_test.go`
+- Modify: `internal/app/controller.go`, `internal/app/controller_test.go`, `internal/ui/model.go`
 
 **Interfaces:**
 - Consumes: `csvSaveDialog`'s Lip Gloss layout and overlay hit-testing conventions, `Controller.View`, and `Controller.Update`.
 - Produces: internal `quitDialog` state with `open`, `selected`, `View(width, height, dirty)`, `handleKey(tea.KeyMsg) quitAction`, and `handleMouse(tea.MouseMsg, width, height) quitAction`; controller state records whether the user confirmed quit.
 
-- [ ] **Step 1: Write failing dialog/controller tests**
+- [x] **Step 1: Write failing dialog/controller tests**
   - Add `TestQuitConfirmationKeyboardAndDoubleCtrlC`: the first Ctrl+C opens the prompt with Nope selected; arrows/Tab and Enter can select Yep/Nope; Y confirms; N/Esc cancel; a second Ctrl+C quits immediately.
   - Add `TestQuitConfirmationMouseActions`: click each rendered action and assert the same confirm/cancel result; a click outside the button rows must not quit or reach the underlying workbook.
   - Add `TestQuitConfirmationDirtyWarning`: assert the dialog includes an unsaved-loss warning iff `session.Workbook.Dirty` is true.
-- [ ] **Step 2: Run focused tests and confirm they fail**
+- [x] **Step 2: Run focused tests and confirm they fail**
 
   Run: `go test ./internal/app -run 'TestQuitConfirmation' -count=1`
 
   Expected: FAIL because Controller currently returns `tea.Quit` on the first Ctrl+C.
-- [ ] **Step 3: Implement quit dialog state and event routing**
+- [x] **Step 3: Implement quit dialog state and event routing**
   - Add `quitDialog` as a centered rounded overlay, default selection Nope, and shared keyboard/mouse actions.
   - Route the first Ctrl+C to opening the dialog; while open, route all key and pointer input to it. A second Ctrl+C sets the confirmed-quit state and returns `tea.Quit` immediately. Yep confirms; Nope/Esc cancels and restores the unchanged view.
   - Remove the direct first-Ctrl+C quit path from both `AppModel.Update` and the root controller so no app entry path bypasses confirmation; do not add auto-save.
-- [ ] **Step 4: Run focused dialog tests**
+- [x] **Step 4: Run focused dialog tests**
 
   Run: `go test ./internal/app -run 'TestQuitConfirmation' -count=1`
 
@@ -59,7 +59,7 @@
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add internal/app/quit_dialog.go internal/app/controller.go internal/app/controller_test.go
+  git add internal/app/quit_dialog.go internal/app/controller.go internal/app/controller_test.go internal/ui/model.go docs/superpowers/plans/2026-10-19-shtui-quit-summary.md
   git commit -m "feat(app): confirm quit with keyboard and mouse"
   ```
 

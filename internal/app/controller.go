@@ -41,6 +41,8 @@ type Controller struct {
 	saveName        textinput.Model
 	keys            ui.KeyMap
 	csvSaveDialog   csvSaveDialog
+	quitDialog      quitDialog
+	quitConfirmed   bool
 	pendingSavePath string
 	status          string
 	width           int
@@ -107,7 +109,13 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return controller, nil
 	}
 	if keyMessage, ok := message.(tea.KeyMsg); ok && keyMessage.Type == tea.KeyCtrlC {
-		return controller, tea.Quit
+		if controller.quitDialog.open {
+			controller.quitDialog.open = false
+			controller.quitConfirmed = true
+			return controller, tea.Quit
+		}
+		controller.quitDialog.show()
+		return controller, nil
 	}
 	if size, ok := message.(tea.WindowSizeMsg); ok {
 		controller.width = size.Width
@@ -120,6 +128,14 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return controller, tea.Batch(viewCommand, pickerCommand)
 		}
 		return controller, viewCommand
+	}
+	if controller.quitDialog.open {
+		switch message := message.(type) {
+		case tea.KeyMsg:
+			return controller, controller.handleQuitAction(controller.quitDialog.handleKey(message))
+		case tea.MouseMsg:
+			return controller, controller.handleQuitAction(controller.quitDialog.handleMouse(message, controller.width, controller.height, controller.session != nil && controller.session.Workbook != nil && controller.session.Workbook.Dirty))
+		}
 	}
 	if controller.pickerOpen {
 		return controller, controller.updatePicker(message)
@@ -203,12 +219,24 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (controller *Controller) handleQuitAction(action quitAction) tea.Cmd {
+	if action != quitConfirm {
+		return nil
+	}
+	controller.quitConfirmed = true
+	return tea.Quit
+}
+
 func (controller *Controller) View() string {
 	if controller == nil {
 		return ""
 	}
 	if controller.loading && controller.session == nil {
-		return "shtui\nLoading " + controller.loadingPath + "…"
+		content := "shtui\nLoading " + controller.loadingPath + "…"
+		if controller.quitDialog.open {
+			content = ui.ComposeOverlay(content, controller.quitDialog.View(controller.width, controller.height, false), controller.width, controller.height)
+		}
+		return content
 	}
 
 	content := controller.view.View()
@@ -225,13 +253,17 @@ func (controller *Controller) View() string {
 		content += "\n" + controller.status
 	}
 	if controller.pickerOpen {
-		return ui.ComposeOverlay(content, controller.pickerView(), controller.width, controller.height)
+		content = ui.ComposeOverlay(content, controller.pickerView(), controller.width, controller.height)
 	}
 	if controller.csvSaveDialog.open {
-		return ui.ComposeOverlay(content, controller.csvSaveDialog.View(controller.width, controller.height), controller.width, controller.height)
+		content = ui.ComposeOverlay(content, controller.csvSaveDialog.View(controller.width, controller.height), controller.width, controller.height)
 	}
 	if controller.session == nil && controller.view.Palette.Open {
-		return ui.ComposeOverlay(content, controller.view.Palette.View(controller.width), controller.width, controller.height)
+		content = ui.ComposeOverlay(content, controller.view.Palette.View(controller.width), controller.width, controller.height)
+	}
+	if controller.quitDialog.open {
+		dirty := controller.session != nil && controller.session.Workbook != nil && controller.session.Workbook.Dirty
+		content = ui.ComposeOverlay(content, controller.quitDialog.View(controller.width, controller.height, dirty), controller.width, controller.height)
 	}
 	return content
 }

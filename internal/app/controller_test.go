@@ -11,6 +11,136 @@ import (
 	"testing"
 )
 
+func TestQuitConfirmationKeyboardAndDoubleCtrlC(t *testing.T) {
+	controller := NewController("")
+	_, command := controller.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if command != nil || !controller.quitDialog.open {
+		t.Fatalf("first Ctrl+C: dialogOpen=%t quitCommand=%t", controller.quitDialog.open, command != nil)
+	}
+	if controller.quitDialog.selected != 1 {
+		t.Fatalf("initial quit selection = %d, want Nope at index 1", controller.quitDialog.selected)
+	}
+	controller.Update(tea.KeyMsg{Type: tea.KeyTab})
+	_, command = controller.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("Tab then Enter on Yep did not confirm quit")
+	}
+	if _, ok := command().(tea.QuitMsg); !ok {
+		t.Fatal("confirm action did not return tea.Quit")
+	}
+
+	yep := NewController("")
+	yep.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, command = yep.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if command == nil {
+		t.Fatal("Y did not confirm quit")
+	}
+
+	cancelled := NewController("")
+	cancelled.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, command = cancelled.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if command != nil || cancelled.quitDialog.open {
+		t.Fatalf("N did not cancel quit: dialogOpen=%t command=%t", cancelled.quitDialog.open, command != nil)
+	}
+
+	escape := NewController("")
+	before := escape.View()
+	escape.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, command = escape.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if command != nil || escape.quitDialog.open || escape.View() != before {
+		t.Fatal("Esc did not cancel quit and restore the unchanged view")
+	}
+
+	double := NewController("")
+	double.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, command = double.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if command == nil {
+		t.Fatal("second Ctrl+C did not bypass confirmation")
+	}
+	if _, ok := command().(tea.QuitMsg); !ok {
+		t.Fatal("second Ctrl+C did not return tea.Quit")
+	}
+}
+
+func TestQuitConfirmationMouseActions(t *testing.T) {
+	yes := NewController("")
+	yes.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	x, y := controllerActionPoint(t, yes.View(), "Yep!")
+	_, command := yes.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if command == nil {
+		t.Fatal("clicking Yep did not confirm quit")
+	}
+
+	no := NewController("")
+	no.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	x, y = controllerActionPoint(t, no.View(), "Nope")
+	_, command = no.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if command != nil || no.quitDialog.open {
+		t.Fatalf("clicking Nope: dialogOpen=%t command=%t", no.quitDialog.open, command != nil)
+	}
+
+	outside := NewController("")
+	outside.session = &workbook.Session{
+		Format: workbook.CSV,
+		Workbook: &workbook.Workbook{Format: workbook.CSV, Sheets: []workbook.Sheet{
+			{Name: "Sheet1", Rows: 4, Cols: 4, Cells: map[workbook.Coord]workbook.Cell{}},
+		}},
+	}
+	outside.view = ui.NewModel(outside.session)
+	outside.view.Grid.Selected = workbook.Coord{Row: 2, Col: 2}
+	outside.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, command = outside.Update(tea.MouseMsg(tea.MouseEvent{X: 0, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}))
+	if command != nil || !outside.quitDialog.open || outside.view.Grid.Selected != (workbook.Coord{Row: 2, Col: 2}) {
+		t.Fatal("click outside quit actions quit, closed the modal, or changed the workbook selection")
+	}
+}
+
+func TestQuitConfirmationDirtyWarning(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		dirty bool
+		want  string
+	}{
+		{name: "dirty", dirty: true, want: "Unsaved changes will be lost"},
+		{name: "clean", want: "Are you sure you want to quit?"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := NewController("")
+			controller.session = &workbook.Session{
+				Format: workbook.CSV,
+				Workbook: &workbook.Workbook{Format: workbook.CSV, Dirty: test.dirty, Sheets: []workbook.Sheet{
+					{Name: "Sheet1", Cells: map[workbook.Coord]workbook.Cell{}},
+				}},
+			}
+			controller.view = ui.NewModel(controller.session)
+			controller.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			if view := ansi.Strip(controller.View()); !strings.Contains(view, test.want) {
+				t.Fatalf("quit dialog = %q, want %q", view, test.want)
+			}
+		})
+	}
+}
+
+func TestQuitConfirmationFitsCompactTerminal(t *testing.T) {
+	controller := NewController("")
+	controller.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	controller.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	view := ansi.Strip(controller.View())
+	rows := strings.Split(view, "\n")
+	if len(rows) > 8 {
+		t.Fatalf("quit dialog rendered %d rows in 8-row terminal: %q", len(rows), view)
+	}
+	for index, row := range rows {
+		if width := ansi.StringWidth(row); width > 30 {
+			t.Errorf("quit dialog row %d width=%d in 30-column terminal: %q", index, width, row)
+		}
+	}
+	for _, action := range []string{"Yep!", "Nope"} {
+		if !strings.Contains(view, action) {
+			t.Errorf("compact quit dialog hides %q: %q", action, view)
+		}
+	}
+}
 func TestWelcomeMouseCreatesCSVWorkbook(t *testing.T) {
 	controller := NewController("")
 	x, y := controllerActionPoint(t, controller.View(), "New CSV")
