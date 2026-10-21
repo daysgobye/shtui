@@ -54,13 +54,15 @@ Different tools suit different spreadsheet and data workflows. Shtui focuses on 
 
 ## Install
 
-From a checkout, run the installer:
+On Linux, from a checkout, run the installer:
 
 ```sh
 bash scripts/install.sh
 ```
 
 It builds `shtui` into `~/.local/bin`, creates a user-level desktop entry, and registers CSV/XLSX file associations. It requires Go and `xdg-mime`; it does not use `sudo`. Registering CSV as the default may replace your current CSV handler.
+
+Once a version tag is released, its prebuilt archives and checksums will appear on [GitHub Releases](https://github.com/daysgobye/shtui/releases). The checkout installer and desktop integration are Linux-only.
 
 Or build and launch directly:
 

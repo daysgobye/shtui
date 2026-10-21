@@ -3,3 +3,6 @@
 
 # Scratch workspace for superpowers subagent-driven-development runs.
 .superpowers/
+
+# GoReleaser release artifacts.
+/dist/
