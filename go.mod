@@ -1,4 +1,4 @@
-module omasheet
+module shtui
 
 go 1.26.0
 

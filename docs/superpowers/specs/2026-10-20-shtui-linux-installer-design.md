@@ -17,7 +17,7 @@ Let a Linux desktop user install Shtui from a source checkout and open CSV and X
 
 ### One user-local installer
 
-Add `scripts/install.sh`. Resolve the repository root relative to the script, build `./cmd/omasheet` with Go, and install the resulting `shtui` executable to `~/.local/bin/shtui`. Fail clearly if Go or the required `xdg-mime` command is unavailable. Build to a temporary file before replacing the installed executable so a failed build does not damage an existing installation.
+Add `scripts/install.sh`. Resolve the repository root relative to the script, build `./cmd/shtui` with Go, and install the resulting `shtui` executable to `~/.local/bin/shtui`. Fail clearly if Go or the required `xdg-mime` command is unavailable. Build to a temporary file before replacing the installed executable so a failed build does not damage an existing installation.
 
 ### Desktop entry
 

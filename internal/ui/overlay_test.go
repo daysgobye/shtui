@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
-	"omasheet/internal/workbook"
+	"shtui/internal/workbook"
 )
 
 func TestComposeOverlayCentersPopupAndPreservesBase(t *testing.T) {

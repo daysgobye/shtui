@@ -3,8 +3,8 @@ package app
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"omasheet/internal/ui"
-	"omasheet/internal/workbook"
+	"shtui/internal/ui"
+	"shtui/internal/workbook"
 	"os"
 	"path/filepath"
 	"strings"

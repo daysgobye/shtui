@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"omasheet/internal/workbook"
+	"shtui/internal/workbook"
 )
 
 func TestRenameSheetCommandUpdatesReferencesAndUndo(t *testing.T) {

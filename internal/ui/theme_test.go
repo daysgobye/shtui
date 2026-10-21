@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"omasheet/internal/workbook"
+	"shtui/internal/workbook"
 )
 
 func TestThemePaletteAndCustomColorFallback(t *testing.T) {

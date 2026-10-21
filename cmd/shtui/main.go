@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"omasheet/internal/app"
+	"shtui/internal/app"
 )
 
 func main() {

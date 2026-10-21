@@ -1,4 +1,4 @@
-# OmaSheet TUI Interaction Redesign
+# Shtui TUI Interaction Redesign
 
 ## Goal
 

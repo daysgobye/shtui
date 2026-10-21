@@ -297,7 +297,7 @@
   Expected: PASS.
 - [ ] **Step 2: Build a smoke binary without overwriting workspace files**
 
-  Run: `go build -o /tmp/shtui-grid-save-smoke ./cmd/omasheet`
+  Run: `go build -o /tmp/shtui-grid-save-smoke ./cmd/shtui`
 
   Expected: successful native Go build.
 - [ ] **Step 3: Smoke the actual TUI in a PTY**

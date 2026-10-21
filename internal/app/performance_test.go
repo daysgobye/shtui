@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/xuri/excelize/v2"
-	"omasheet/internal/workbook"
+	"shtui/internal/workbook"
 )
 
 func BenchmarkOpenEditSave25kBy20(b *testing.B) {

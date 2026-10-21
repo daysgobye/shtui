@@ -41,7 +41,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! (cd -- "$repo_root" && go build -o "$binary_tmp" ./cmd/omasheet); then
+if ! (cd -- "$repo_root" && go build -o "$binary_tmp" ./cmd/shtui); then
   fail 'Go build failed; existing installation was left unchanged'
 fi
 chmod +x -- "$binary_tmp"

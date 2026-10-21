@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"omasheet/internal/ui"
-	"omasheet/internal/workbook"
+	"shtui/internal/ui"
+	"shtui/internal/workbook"
 )
 
 type loadCompleteMsg struct {

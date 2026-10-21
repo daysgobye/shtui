@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
-	"omasheet/internal/workbook"
+	"shtui/internal/workbook"
 )
 
 func TestSortAndFilterCommandsOperateOnWorkbook(t *testing.T) {

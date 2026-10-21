@@ -50,7 +50,7 @@
 - [x] **Step 4: Extend `scripts/install_test.sh` for the Review Focus cases.** Test failed Go build preserves an existing binary, failed `xdg-mime` exits without a success message, and absence of `update-desktop-database` remains non-fatal while real `xdg-mime` defaults are set. Use stubs only for external-command failure cases; inspect the generated desktop entry and actual installed file behavior.
 - [x] **Step 5: Run `bash scripts/install_test.sh`.** Expected: PASS for install, rerun, path escaping, actual MIME defaults, failed build, failed MIME registration, and optional database refresh behavior.
 - [x] **Step 6: Document use in `docs/usage.md`.** Add a Linux installation section showing `bash scripts/install.sh`, explaining that it builds into `~/.local/bin`, launches in a terminal, and sets CSV/XLSX defaults (including the CSV default replacement consequence).
-- [x] **Step 7: Verify the installed app.** Run `desktop-file-validate` on the generated entry when installed, run `go test ./...` and `go build -o <temporary-path> ./cmd/omasheet`, then launch the installed executable with CSV and XLSX fixtures from a terminal smoke test and confirm each opens the requested workbook.
+- [x] **Step 7: Verify the installed app.** Run `desktop-file-validate` on the generated entry when installed, run `go test ./...` and `go build -o <temporary-path> ./cmd/shtui`, then launch the installed executable with CSV and XLSX fixtures from a terminal smoke test and confirm each opens the requested workbook.
 - [x] **Step 8: Commit the installer, tests, and usage documentation.**
 
 **Commit:** `feat: add user-local Linux installer`

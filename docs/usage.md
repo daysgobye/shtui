@@ -5,7 +5,7 @@ Shtui is a compiled Go terminal spreadsheet for CSV and XLSX files. It uses a vi
 ## Build and launch
 
 ```sh
-go build -o shtui ./cmd/omasheet
+go build -o shtui ./cmd/shtui
 ./shtui [workbook.csv|workbook.xlsx]
 ```
 

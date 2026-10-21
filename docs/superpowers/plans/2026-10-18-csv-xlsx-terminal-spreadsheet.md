@@ -50,7 +50,7 @@
 - `Input` is literal cell text or formula source; do not duplicate formula source in another field. Blank cells are absent from the sparse cell map.
 - `ReadCSV(io.Reader, string) (*Workbook, error)` and `WriteCSV(io.Writer, *Workbook, int) error`.
 
-- [ ] **Step 1: Create the module and failing model/CSV tests.** Initialize module `omasheet` with Go 1.26.0 and add Bubble Tea, Lip Gloss, and Excelize dependencies. Add tests for a one-sheet workbook and `TestCSVRoundTripQuotedAndFormulaCells`, covering commas, quotes, embedded newlines, trailing empty cells, and a formula string such as `=SUM(A1:A2)`.
+- [ ] **Step 1: Create the module and failing model/CSV tests.** Initialize module `shtui` with Go 1.26.0 and add Bubble Tea, Lip Gloss, and Excelize dependencies. Add tests for a one-sheet workbook and `TestCSVRoundTripQuotedAndFormulaCells`, covering commas, quotes, embedded newlines, trailing empty cells, and a formula string such as `=SUM(A1:A2)`.
 - [ ] **Step 2: Run the focused tests and confirm failure.** Run `go test ./internal/workbook -run 'Test(CSVRoundTripQuotedAndFormulaCells|WorkbookModel)' -count=1`; expected: compile/test failure because the model and CSV functions do not exist.
 - [ ] **Step 3: Implement the sparse workbook model and CSV adapter.** Use Go's `encoding/csv`; preserve formula source as ordinary CSV text and create exactly one sheet.
 - [ ] **Step 4: Run focused tests.** Run the same command; expected: PASS, with exact parsed fields and formula source preserved.
@@ -190,7 +190,7 @@
 ### Task 8: Integrate launch/save flows, docs, and end-to-end verification
 
 **Files:**
-- Create: `cmd/omasheet/main.go`
+- Create: `cmd/shtui/main.go`
 - Create: `internal/app/controller.go`
 - Create: `internal/app/controller_test.go`
 - Create: `docs/usage.md`
@@ -204,7 +204,7 @@
 - [ ] **Step 2: Run controller tests and confirm failure.** Run `go test ./internal/app -count=1`; expected: missing controller behavior.
 - [ ] **Step 3: Integrate asynchronous loading/saving with progress.** Keep the TUI responsive while a workbook is parsed; display completion/error state and preserve dirty state until a save succeeds.
 - [ ] **Step 4: Add the user guide.** Document launch, keyboard/mouse controls, command palette, toolbar toggle, formulas, CSV limitations, custom colors, and XLSX preservation limits.
-- [ ] **Step 5: Run the full suite and build.** Run `go test ./...` and `go build -o /tmp/omasheet ./cmd/omasheet`; expected: all tests pass and a compiled executable is produced.
+- [ ] **Step 5: Run the full suite and build.** Run `go test ./...` and `go build -o /tmp/shtui ./cmd/shtui`; expected: all tests pass and a compiled executable is produced.
 - [ ] **Step 6: Smoke the real TUI.** Launch with no path and with CSV/XLSX fixtures. Exercise cell editing, formula recalculation, tabs, fill/font/border/merge, conditional formatting, sort/filter/find, mouse selection/column resizing, hidden toolbar plus `Ctrl+P`, and save/reopen. Expected: visible state matches saved content and errors do not damage originals.
 - [ ] **Step 7: Measure the target-size path.** Run `go test ./internal/app -run '^$' -bench '^BenchmarkOpenEditSave25kBy20$' -benchmem`; then manually time five cold PTY launches from command start to first grid frame, quitting immediately after display. Record the environment and median with no invented threshold.
-- [ ] **Step 8: Commit.** Stage only `cmd/omasheet/main.go`, `internal/app/controller.go`, `internal/app/controller_test.go`, `internal/app/performance_test.go`, and `docs/usage.md`; run `git commit --only` with those exact paths and message `feat: ship CSV and XLSX terminal spreadsheet`.
+- [ ] **Step 8: Commit.** Stage only `cmd/shtui/main.go`, `internal/app/controller.go`, `internal/app/controller_test.go`, `internal/app/performance_test.go`, and `docs/usage.md`; run `git commit --only` with those exact paths and message `feat: ship CSV and XLSX terminal spreadsheet`.

@@ -15,7 +15,7 @@
 - Keep Go as the application language and preserve native compiled startup.
 - Retain Bubble Tea/Bubbles, Lip Gloss, the custom virtualized grid, and Excelize workbook operations; add no dependencies.
 - Preserve supported keyboard workflows, terminal-theme colors, async open/save, CSV-loss warnings, and unknown XLSX feature round-tripping.
-- Keep the internal Go module and source paths (`omasheet`) unchanged. User-facing brand and executable name become `Shtui` and `shtui`.
+- Keep the internal Go module and source paths (`shtui`) unchanged. User-facing brand and executable name become `Shtui` and `shtui`.
 - No recent-file persistence or new spreadsheet functions are in scope.
 
 ## Review Focus
@@ -101,7 +101,7 @@
 
 **Files:**
 - Create: `internal/ui/home.go`
-- Modify: `internal/ui/model.go`, `internal/app/controller.go`, `internal/app/controller_test.go`, `cmd/omasheet/main.go`, `docs/usage.md`
+- Modify: `internal/ui/model.go`, `internal/app/controller.go`, `internal/app/controller_test.go`, `cmd/shtui/main.go`, `docs/usage.md`
 - Test: `internal/ui/model_test.go`
 
 **Interfaces:**
@@ -113,9 +113,9 @@
 - [ ] **Step 2: Run focused tests and confirm the current text-only/duplicate screens fail.** Run `go test ./internal/ui ./internal/app -run 'Test(WelcomeScreen|NoPathScreen|NoPathShortcut)' -count=1`; expect missing Shtui branding, non-interactive actions, or clipping.
 - [ ] **Step 3: Implement the centered launcher in `internal/ui/home.go`.** Use a small Bubbles list with Open/New CSV/New XLSX actions, the approved centered wordmark/tagline, terminal-theme styling, and visible shortcut hints. Ensure click activation is a single click and the layout clamps to short/narrow terminals.
 - [ ] **Step 4: Make `AppModel` the single home-screen owner.** Route home keyboard/mouse selection through `runCommand`/`TakeCommand`; have `Controller.View` delegate to `view.View()` instead of rendering a second plain-text screen. In `Controller.Update`, consume home actions after mouse updates and preserve existing open/create controller paths and keyboard shortcuts.
-- [ ] **Step 5: Apply the Shtui user-facing name.** Change CLI usage to `shtui`, update `docs/usage.md` build/run examples to `go build -o shtui ./cmd/omasheet` and `./shtui`, and update the welcome/loading labels. Keep Go module, imports, and source directory unchanged.
+- [ ] **Step 5: Apply the Shtui user-facing name.** Change CLI usage to `shtui`, update `docs/usage.md` build/run examples to `go build -o shtui ./cmd/shtui` and `./shtui`, and update the welcome/loading labels. Keep Go module, imports, and source directory unchanged.
 - [ ] **Step 6: Run focused launch/controller tests.** Run `go test ./internal/ui ./internal/app -run 'Test(WelcomeScreen|WelcomeMouse|NoPathScreen|NoPathShortcut|OpenPicker)' -count=1`; expect pass with mouse and keyboard actions reaching the existing controller behavior.
-- [ ] **Step 7: Commit.** `git add internal/ui/home.go internal/ui/model.go internal/ui/model_test.go internal/app/controller.go internal/app/controller_test.go cmd/omasheet/main.go docs/usage.md && git commit -m "feat(ui): add Shtui welcome launcher"`.
+- [ ] **Step 7: Commit.** `git add internal/ui/home.go internal/ui/model.go internal/ui/model_test.go internal/app/controller.go internal/app/controller_test.go cmd/shtui/main.go docs/usage.md && git commit -m "feat(ui): add Shtui welcome launcher"`.
 
 ### Task 6: Full verification, real terminal smoke, and final review
 
@@ -123,7 +123,7 @@
 - Verify: all files changed by Tasks 1–5; do not inspect or stage pre-existing user changes.
 
 - [ ] **Step 1: Run the full test suite.** Run `go test ./...`; expect all packages to pass.
-- [ ] **Step 2: Build the native Shtui executable.** Run `go build -o /tmp/shtui-smoke ./cmd/omasheet`; expect exit 0. Run `/tmp/shtui-smoke one two` and confirm usage names `shtui`.
+- [ ] **Step 2: Build the native Shtui executable.** Run `go build -o /tmp/shtui-smoke ./cmd/shtui`; expect exit 0. Run `/tmp/shtui-smoke one two` and confirm usage names `shtui`.
 - [ ] **Step 3: Smoke the actual TUI.** Launch `/tmp/shtui-smoke` at 80×24 and 30×10; inspect the centered Shtui launcher, create/open a workbook, inspect the sheet `+` tab and fill boundaries, open the color picker and conditional popup, and verify the popup layouts remain within bounds. Use deterministic `AppModel.Update` mouse tests for each click target.
 - [ ] **Step 4: Request one fresh final code review** of the committed Go/docs diff for layout drift, modal event leakage, formatting regressions, and unsupported-feature/data preservation.
 - [ ] **Step 5: Remove only `/tmp/shtui-smoke` and temporary fixtures created by the smoke run.** Preserve all pre-existing user deletions and untracked files.

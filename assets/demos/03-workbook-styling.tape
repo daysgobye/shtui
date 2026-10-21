@@ -17,7 +17,7 @@ Env TERM "xterm-256color"
 Env CLICOLOR_FORCE "1"
 
 Hide
-Type "env -u NO_COLOR CLICOLOR_FORCE=1 COLORTERM=truecolor TERM=xterm-256color go run ./cmd/omasheet test_sheets/studio_demo.xlsx"
+Type "env -u NO_COLOR CLICOLOR_FORCE=1 COLORTERM=truecolor TERM=xterm-256color go run ./cmd/shtui test_sheets/studio_demo.xlsx"
 Enter
 Sleep 2s
 Down 9

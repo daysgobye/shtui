@@ -10,7 +10,7 @@ Make Shtui's sheet navigation, color controls, and conditional-format dialog rel
 - Retain Bubble Tea/Bubbles, Lip Gloss, the custom virtualized grid, and Excelize workbook operations; add no dependencies.
 - Preserve supported keyboard workflows, terminal-theme colors, async open/save, CSV-loss warnings, and unknown XLSX feature round-tripping.
 - Preserve workbook contents and formatting until an explicit action applies a change. Conditional-format drafts remain unapplied until Done.
-- Keep the internal Go module and source paths (`omasheet`) unchanged. User-facing brand and executable name become `Shtui` and `shtui`.
+- Keep the internal Go module and source paths (`shtui`) unchanged. User-facing brand and executable name become `Shtui` and `shtui`.
 - No recent-file persistence or new spreadsheet functions are in scope.
 
 ## Architecture decisions
