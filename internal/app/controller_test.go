@@ -61,6 +61,16 @@ func TestQuitConfirmationKeyboardAndDoubleCtrlC(t *testing.T) {
 		t.Fatal("second Ctrl+C did not return tea.Quit")
 	}
 }
+func TestQuitDialogUsesUppercaseBrandText(t *testing.T) {
+	plain := ansi.Strip((quitDialog{}).View(80, 24, false))
+	if !strings.Contains(plain, "Quit SHTUI?") {
+		t.Fatalf("quit dialog heading = %q, want uppercase SHTUI", plain)
+	}
+	if strings.Contains(plain, "A           B           C           D           E") {
+		t.Fatalf("quit dialog rendered the full grid wordmark: %q", plain)
+	}
+}
+
 
 func TestQuitConfirmationMouseActions(t *testing.T) {
 	yes := NewController("")
@@ -803,8 +813,17 @@ func TestRunPrintsSummaryOnlyAfterConfirmedQuit(t *testing.T) {
 			if got := strings.Contains(ansi.Strip(output), "Saved workbook: /tmp/book.xlsx"); got != test.wantText {
 				t.Fatalf("summary output = %q, contains summary=%t want %t", ansi.Strip(output), got, test.wantText)
 			}
-			if test.wantText && !strings.Contains(ansi.Strip(output), "SHTUI") {
-				t.Fatalf("confirmed summary lacks SHTUI wordmark: %q", ansi.Strip(output))
+			if test.wantText {
+				plain := ansi.Strip(output)
+				for _, part := range []string{
+					"A           B           C           D           E",
+					"1 │ █████████ │ ███   ███ │ █████████ │ ███   ███ │ █████████ │",
+					"5 │ █████████ │ ███   ███ │    ███    │ █████████ │ █████████ │",
+				} {
+					if !strings.Contains(plain, part) {
+						t.Fatalf("confirmed summary lacks wordmark part %q: %q", part, plain)
+					}
+				}
 			}
 		})
 	}

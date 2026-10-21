@@ -53,6 +53,7 @@ func newPaletteItems(keys KeyMap) []list.Item {
 		{ID: "unmerge", Name: "Unmerge selected cells"},
 		{ID: "toggle-bold", Name: "Toggle bold"},
 		{ID: "add-sheet", Name: "Add sheet"},
+		{ID: "rename-sheet", Name: "Rename sheet", Description: "Rename the active sheet"},
 		{ID: "conditional-format", Name: "Add conditional formatting"},
 		{ID: "insert-function", Name: "Insert function"},
 		{ID: "previous-sheet", Name: "Previous sheet"},

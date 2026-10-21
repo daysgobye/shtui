@@ -636,7 +636,7 @@ func formatExitSummary(confirmed bool, runErr error, summary string) string {
 	if !confirmed || runErr != nil || summary == "" {
 		return ""
 	}
-	wordmark := lipgloss.NewStyle().Foreground(ui.ANSIColor(5)).Bold(true).Render("SHTUI")
+	wordmark := ui.SHTUIWordmark()
 	return "\n" + wordmark + "\n" + summary + "\n"
 }
 

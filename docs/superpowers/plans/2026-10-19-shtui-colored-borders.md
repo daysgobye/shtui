@@ -89,7 +89,7 @@
   Run: `go test ./internal/ui -run 'TestBorderColor|TestRemoveBorders|TestCommandPalette' -count=1 && go test ./internal/workbook -run 'TestApplyBorderColor|TestRemoveBorders' -count=1`
 
   Expected: PASS; picker mouse actions apply once, cancellation does not mutate, old presets are gone, and removal remains available.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `ad57886` (`feat(ui): add color picker for cell borders`)
 
   ```bash
   git add internal/ui/model.go internal/ui/command_palette.go internal/ui/toolbar.go internal/ui/operations_test.go internal/ui/command_palette_test.go internal/workbook/styles.go docs/usage.md docs/superpowers/plans/2026-10-19-shtui-colored-borders.md

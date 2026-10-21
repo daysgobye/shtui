@@ -505,7 +505,7 @@ func TestToolbarOverflowRetainsBorderCommands(t *testing.T) {
 
 func TestPaletteIncludesCoreWorkbookOperations(t *testing.T) {
 	palette := NewCommandPalette(DefaultKeyMap())
-	for _, expected := range []string{"sort", "filter", "border-color", "border-none", "merge", "unmerge", "conditional-format", "toggle-bold", "add-sheet", "open-file", "save-as"} {
+	for _, expected := range []string{"sort", "filter", "border-color", "border-none", "merge", "unmerge", "conditional-format", "toggle-bold", "add-sheet", "rename-sheet", "open-file", "save-as"} {
 		found := false
 		for _, item := range palette.list.Items() {
 			if item, ok := item.(paletteItem); ok && item.command.ID == expected {

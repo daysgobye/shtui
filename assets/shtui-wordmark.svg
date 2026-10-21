@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 250" role="img" aria-labelledby="title description">
+  <title id="title">SHTUI</title>
+  <desc id="description">A five-column spreadsheet-grid wordmark. SH in #C678F2, TUI in #E5B85C. A calmer way to work with spreadsheets.</desc>
+  <defs>
+    <pattern id="sh-blocks" width="8.5" height="26" patternUnits="userSpaceOnUse">
+      <rect width="8.5" height="26" fill="#C678F2"/>
+    </pattern>
+    <pattern id="tui-blocks" width="8.5" height="26" patternUnits="userSpaceOnUse">
+      <rect width="8.5" height="26" fill="#E5B85C"/>
+    </pattern>
+    <g id="full"><rect width="76" height="26"/></g>
+    <g id="left"><rect width="25.5" height="26"/></g>
+    <g id="center"><rect x="25.5" width="25.5" height="26"/></g>
+    <g id="right"><rect x="51" width="25.5" height="26"/></g>
+    <g id="s">
+      <use href="#full"/>
+      <use href="#left" y="26"/>
+      <use href="#full" y="52"/>
+      <use href="#right" y="78"/>
+      <use href="#full" y="104"/>
+    </g>
+    <g id="h">
+      <use href="#left"/><use href="#right"/>
+      <use href="#left" y="26"/><use href="#right" y="26"/>
+      <use href="#full" y="52"/>
+      <use href="#left" y="78"/><use href="#right" y="78"/>
+      <use href="#left" y="104"/><use href="#right" y="104"/>
+    </g>
+    <g id="t">
+      <use href="#full"/>
+      <use href="#center" y="26"/><use href="#center" y="52"/>
+      <use href="#center" y="78"/><use href="#center" y="104"/>
+    </g>
+    <g id="u">
+      <use href="#left"/><use href="#right"/>
+      <use href="#left" y="26"/><use href="#right" y="26"/>
+      <use href="#left" y="52"/><use href="#right" y="52"/>
+      <use href="#left" y="78"/><use href="#right" y="78"/>
+      <use href="#full" y="104"/>
+    </g>
+    <g id="i">
+      <use href="#full"/>
+      <use href="#center" y="26"/><use href="#center" y="52"/>
+      <use href="#center" y="78"/>
+      <use href="#full" y="104"/>
+    </g>
+  </defs>
+  <g fill="#686868" font-family="monospace" font-size="12" text-anchor="middle">
+    <text x="116" y="35">A</text><text x="214" y="35">B</text><text x="312" y="35">C</text><text x="410" y="35">D</text><text x="508" y="35">E</text>
+  </g>
+  <g fill="#686868" font-family="monospace" font-size="12" text-anchor="end">
+    <text x="55" y="70">1</text><text x="55" y="96">2</text><text x="55" y="122">3</text><text x="55" y="148">4</text><text x="55" y="174">5</text>
+  </g>
+  <g fill="none" stroke="#858585" stroke-width="1">
+    <path d="M67 45H557 M67 181H557 M67 45V181 M165 45V181 M263 45V181 M361 45V181 M459 45V181 M557 45V181"/>
+  </g>
+  <g fill="url(#sh-blocks)">
+    <use href="#s" x="78" y="50"/>
+    <use href="#h" x="176" y="50"/>
+  </g>
+  <g fill="url(#tui-blocks)">
+    <use href="#t" x="274" y="50"/>
+    <use href="#u" x="372" y="50"/>
+    <use href="#i" x="470" y="50"/>
+  </g>
+  <text x="312" y="220" fill="#686868" font-family="monospace" font-size="12" text-anchor="middle">a calmer way to work with spreadsheets</text>
+</svg>

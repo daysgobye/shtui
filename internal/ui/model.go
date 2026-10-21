@@ -41,6 +41,7 @@ type AppModel struct {
 	Palette             CommandPalette
 	FunctionPicker      formulaPickerState
 	ConditionalDialog   conditionalDialogState
+	renameSheetDialog   renameSheetDialogState
 	home                homeScreen
 	keys                KeyMap
 	Theme               ThemePalette
@@ -158,6 +159,9 @@ func (model *AppModel) View() string {
 			model.height,
 		))
 	}
+	if model.renameSheetDialog.Open {
+		return ComposeOverlay(output.String(), model.renameSheetDialog.View(model.width, model.height), model.width, model.height)
+	}
 	if model.Palette.Open {
 		return ComposeOverlay(output.String(), model.Palette.View(model.width), model.width, model.height)
 	}
@@ -178,6 +182,10 @@ func (model *AppModel) View() string {
 }
 
 func (model *AppModel) handleKey(message tea.KeyMsg) {
+	if model.renameSheetDialog.Open {
+		model.handleRenameSheetDialogAction(model.renameSheetDialog.HandleKey(message))
+		return
+	}
 	if model.keys.Matches(message, model.keys.OpenPalette) {
 		model.Palette.Show()
 		model.findMode = false
@@ -438,8 +446,36 @@ func (model *AppModel) handleConditionalDialogAction(action string) {
 	}
 }
 
+func (model *AppModel) handleRenameSheetDialogAction(action string) {
+	switch action {
+	case "cancel":
+		model.renameSheetDialog = renameSheetDialogState{}
+	case "rename":
+		oldName := model.renameSheetDialog.OriginalName
+		newName := model.renameSheetDialog.Input.Value()
+		if newName == oldName {
+			model.renameSheetDialog = renameSheetDialogState{}
+			return
+		}
+		if err := workbook.RenameSheet(model.session, oldName, newName); err != nil {
+			model.renameSheetDialog.Error = err.Error()
+			return
+		}
+		model.renameSheetDialog = renameSheetDialogState{}
+		model.status = "Renamed sheet to " + newName
+		model.showCSVFeatureNotice()
+		model.recordActionSummary(model.status)
+		model.layout()
+	}
+}
+
 func (model *AppModel) handleMouse(message tea.MouseMsg) {
 	event := tea.MouseEvent(message)
+	if model.renameSheetDialog.Open {
+		action := model.renameSheetDialog.HandleMouse(message, model.width, model.height)
+		model.handleRenameSheetDialogAction(action)
+		return
+	}
 	if model.ColorPicker.Open {
 		model.handleColorPickerMouse(message)
 		return
@@ -568,6 +604,10 @@ func (model *AppModel) runCommand(command string) {
 		if err == nil {
 			model.showCSVFeatureNotice()
 			model.recordActionSummary("Added " + name)
+		}
+	case "rename-sheet":
+		if sheet := model.activeSheet(); sheet != nil {
+			model.renameSheetDialog = newRenameSheetDialog(sheet.Name)
 		}
 	case "merge":
 		result, err := workbook.MergeRange(model.session, model.activeSheet().Name, model.selectedRange(), false)

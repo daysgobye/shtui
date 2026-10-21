@@ -104,6 +104,7 @@ func (dialog quitDialog) View(width, height int, dirty bool) string {
 	muted := lipgloss.NewStyle().Foreground(ui.ANSIColor(8))
 	selected := lipgloss.NewStyle().Foreground(ui.ANSIColor(7)).Background(ui.ANSIColor(5)).Bold(true)
 	button := lipgloss.NewStyle().Foreground(ui.ANSIColor(7))
+	quitTitle := accent.Render("Quit ") + ui.SHTUIWordmarkText() + accent.Render("?")
 	message := "Are you sure you want to quit?"
 	if dirty {
 		message = "Unsaved changes will be lost."
@@ -119,7 +120,7 @@ func (dialog quitDialog) View(width, height int, dirty bool) string {
 	if height < 12 || width < 44 {
 		innerWidth := max(min(48, width-4), 1)
 		actions := lipgloss.NewStyle().Width(innerWidth).Align(lipgloss.Center).Render(lipgloss.JoinHorizontal(lipgloss.Top, confirmLabel, "   ", cancelLabel))
-		rows := []string{accent.Render("Quit Shtui?"), ansi.Wordwrap(message, innerWidth, " "), actions}
+		rows := []string{quitTitle, ansi.Wordwrap(message, innerWidth, " "), actions}
 		if width < 22 {
 			rows = []string{accent.Render("Quit?"), ansi.Wordwrap(message, innerWidth, " "), confirmLabel, cancelLabel}
 		}
@@ -137,7 +138,7 @@ func (dialog quitDialog) View(width, height int, dirty bool) string {
 	innerWidth := max(min(48, width-8), 1)
 	actions := lipgloss.NewStyle().Width(innerWidth).Align(lipgloss.Center).Render(lipgloss.JoinHorizontal(lipgloss.Top, confirmLabel, "   ", cancelLabel))
 	rows := []string{
-		accent.Render("Quit Shtui?"),
+		quitTitle,
 		"",
 		ansi.Wordwrap(message, innerWidth, " "),
 		"",
