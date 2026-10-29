@@ -95,25 +95,114 @@ func TestAdditionalFormulaFunctions(t *testing.T) {
 		}
 	}
 }
-func TestUnreliableSumIfRemainsStale(t *testing.T) {
+func TestSUMIFUsesCriteriaAndSumRanges(t *testing.T) {
 	session := newFormulaSession(t)
-	setFormulaLiteral(t, session, "Sheet1", "A1", "2")
-	setFormulaLiteral(t, session, "Sheet1", "A2", "4")
-	setFormulaLiteral(t, session, "Sheet1", "A3", "pear")
-	setFormulaLiteral(t, session, "Sheet1", "B1", "10")
-	setFormulaLiteral(t, session, "Sheet1", "B2", "20")
-	setFormulaLiteral(t, session, "Sheet1", "B3", "30")
-	formula := `SUMIF(A1:A3,">0",B1:B3)`
+	setFormulaLiteral(t, session, "Sheet1", "A1", "Food")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "food")
+	setFormulaLiteral(t, session, "Sheet1", "A3", "Travel")
+	setFormulaLiteral(t, session, "Sheet1", "B1", "12.5")
+	setFormulaLiteral(t, session, "Sheet1", "B2", "7.5")
+	setFormulaLiteral(t, session, "Sheet1", "B3", "20")
+	formula := `SUMIF(A1:A3,"food",B1:B3)`
 	setFormula(t, session, "Sheet1", "C1", formula)
-	cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
-	cell.Result = "cached"
-	session.Workbook.Sheets[0].Cells[Coord{Row: 0, Col: 2}] = cell
-	if err := Recalculate(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}); err != nil {
+
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1"}); err != nil {
 		t.Fatalf("Recalculate: %v", err)
 	}
-	cell = formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
-	if cell.Input != "="+formula || cell.Result != "cached" || cell.CalculationState != Stale {
-		t.Fatalf("unreliable SUMIF cell = (%q, %q, %q), want original formula, cached result, stale", cell.Input, cell.Result, cell.CalculationState)
+	cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if cell.Input != "="+formula || cell.Result != "20" || cell.CalculationState != Current {
+		t.Fatalf("SUMIF cell = (%q, %q, %q), want (%q, 20, current)", cell.Input, cell.Result, cell.CalculationState, "="+formula)
+	}
+}
+
+func TestSUMIFDefaultsSumRange(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "3")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "9")
+	setFormulaLiteral(t, session, "Sheet1", "A3", "not a number")
+	setFormula(t, session, "Sheet1", "B1", `SUMIF(A1:A3,">2")`)
+
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1"}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 1})
+	if cell.Result != "12" || cell.CalculationState != Current {
+		t.Fatalf("SUMIF cell = (%q, %q), want (12, current)", cell.Result, cell.CalculationState)
+	}
+}
+
+func TestSUMIFMismatchedSumRangeUsesCriteriaShape(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "yes")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "yes")
+	setFormulaLiteral(t, session, "Sheet1", "A3", "yes")
+	setFormulaLiteral(t, session, "Sheet1", "B1", "4")
+	setFormulaLiteral(t, session, "Sheet1", "B2", "6")
+	setFormulaLiteral(t, session, "Sheet1", "B3", "100")
+	setFormula(t, session, "Sheet1", "C1", `SUMIF(A1:A2,"yes",B1:B3)`)
+	setFormula(t, session, "Sheet1", "C2", `SUMIF(A1:A3,"yes",B1:B2)`)
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1"}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	longer := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if longer.Result != "10" || longer.CalculationState != Current {
+		t.Fatalf("long sum range result = (%q, %q), want (10, current)", longer.Result, longer.CalculationState)
+	}
+	shorter := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 1, Col: 2})
+	if shorter.Result != "110" || shorter.CalculationState != Current {
+		t.Fatalf("short sum range result = (%q, %q), want (110, current)", shorter.Result, shorter.CalculationState)
+	}
+}
+
+func TestSUMIFSourceEditRecalculatesTotal(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "yes")
+	setFormulaLiteral(t, session, "Sheet1", "A2", "no")
+	setFormulaLiteral(t, session, "Sheet1", "B1", "5")
+	setFormulaLiteral(t, session, "Sheet1", "B2", "100")
+	setFormula(t, session, "Sheet1", "C1", `SUMIF(A1:A2,"yes",B1:B2)`)
+	setFormula(t, session, "Sheet1", "D1", "C1*2")
+	address := CellAddress{Sheet: "Sheet1"}
+	if err := Recalculate(session, address); err != nil {
+		t.Fatalf("initial Recalculate: %v", err)
+	}
+	if got := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2}).Result; got != "5" {
+		t.Fatalf("initial total = %q, want 5", got)
+	}
+	if got := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 3}).Result; got != "10" {
+		t.Fatalf("initial dependent = %q, want 10", got)
+	}
+	setFormulaLiteral(t, session, "Sheet1", "A2", "yes")
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1", Row: 1}); err != nil {
+		t.Fatalf("Recalculate after source edit: %v", err)
+	}
+	cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if cell.Result != "105" || cell.CalculationState != Current {
+		t.Fatalf("edited total = (%q, %q), want (105, current)", cell.Result, cell.CalculationState)
+	}
+	dependent := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 3})
+	if dependent.Result != "210" || dependent.CalculationState != Current {
+		t.Fatalf("edited dependent = (%q, %q), want (210, current)", dependent.Result, dependent.CalculationState)
+	}
+}
+
+func TestSUMIFMalformedCriteriaOrArgumentsSetError(t *testing.T) {
+	for _, formula := range []string{
+		`SUMIF(A1:A2,">")`,
+		`SUMIF(A2:A1,"yes")`,
+		`SUMIF(A1:A2,"yes",B1:B2,C1:C2)`,
+	} {
+		t.Run(formula, func(t *testing.T) {
+			session := newFormulaSession(t)
+			setFormula(t, session, "Sheet1", "C1", formula)
+			if err := Recalculate(session, CellAddress{Sheet: "Sheet1"}); err != nil {
+				t.Fatalf("Recalculate: %v", err)
+			}
+			cell := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+			if cell.Input != "="+formula || cell.CalculationState != Error || cell.Result == "" {
+				t.Fatalf("malformed SUMIF = (%q, %q, %q), want preserved source and non-empty error", cell.Input, cell.Result, cell.CalculationState)
+			}
+		})
 	}
 }
 

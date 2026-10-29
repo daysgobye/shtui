@@ -49,6 +49,17 @@ func Recalculate(session *Session, changed CellAddress) error {
 				return fmt.Errorf("recalculate %s!%d,%d: %w", sheet.Name, coord.Row, coord.Col, err)
 			}
 			formula := strings.TrimPrefix(cell.Input, "=")
+			if result, handled, err := evaluateSUMIF(session, sheet.Name, formula); handled {
+				if err != nil {
+					cell.CalculationState = Error
+					cell.Result = err.Error()
+				} else {
+					cell.Result = result
+					cell.CalculationState = Current
+				}
+				sheet.Cells[coord] = cell
+				continue
+			}
 			if hasUnsupportedFunction(formula) {
 				cell.CalculationState = Stale
 				sheet.Cells[coord] = cell

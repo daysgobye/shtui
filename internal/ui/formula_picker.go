@@ -41,6 +41,7 @@ var supportedFunctions = []functionDefinition{
 	{name: "COUNT", description: "Count numeric cells", arguments: "range"},
 	{name: "COUNTA", description: "Count non-empty cells", arguments: "range"},
 	{name: "COUNTIF", description: "Count cells matching a criterion", arguments: "range, criteria"},
+	{name: "SUMIF", description: "Sum values for cells matching a criterion", arguments: "criteria_range, criteria, [sum_range]"},
 	{name: "MIN", description: "Smallest number in a range", arguments: "range"},
 	{name: "MAX", description: "Largest number in a range", arguments: "range"},
 	{name: "IF", description: "Choose a value when a condition is true", arguments: "condition, true value, false value"},
@@ -158,7 +159,7 @@ func (picker *formulaPickerState) Formula() (string, error) {
 			return "", fmt.Errorf("invalid range %q: %w", argument, err)
 		}
 		return "=" + item.definition.name + "(" + argument + ")", nil
-	case "IF", "COUNTIF", "IFERROR":
+	case "IF", "COUNTIF", "IFERROR", "SUMIF":
 		return "=" + item.definition.name + "(" + argument + ")", nil
 	default:
 		return "", fmt.Errorf("unsupported function %q", item.definition.name)
@@ -167,7 +168,7 @@ func (picker *formulaPickerState) Formula() (string, error) {
 
 func isMultiArgumentFunction(name string) bool {
 	switch name {
-	case "IF", "COUNTIF", "IFERROR":
+	case "IF", "COUNTIF", "IFERROR", "SUMIF":
 		return true
 	default:
 		return false

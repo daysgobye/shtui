@@ -76,9 +76,32 @@ func TestFormulaPickerAdditionalFunctions(t *testing.T) {
 		})
 	}
 
-	for _, function := range supportedFunctions {
-		if function.name == "SUMIF" {
-			t.Fatal("SUMIF must remain unavailable while Excelize returns incorrect numeric-criteria results")
+}
+
+func TestFormulaPickerSupportsSUMIFArguments(t *testing.T) {
+	picker := newFormulaPicker("A1:A3", "C1")
+	index := -1
+	for i, item := range picker.Functions.Items() {
+		function, ok := item.(functionItem)
+		if ok && function.definition.name == "SUMIF" {
+			index = i
+			break
 		}
+	}
+	if index < 0 {
+		t.Fatal("SUMIF is missing from the supported function list")
+	}
+	for picker.Functions.Index() < index {
+		picker.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if picker.RangeInput.Prompt != "Arguments: " {
+		t.Fatalf("argument prompt = %q, want Arguments: ", picker.RangeInput.Prompt)
+	}
+	picker.RangeInput.SetValue(`A1:A3,"tea",B1:B3`)
+	if got, err := picker.Formula(); err != nil || got != `=SUMIF(A1:A3,"tea",B1:B3)` {
+		t.Fatalf("formula = %q, error %v; want valid three-argument SUMIF", got, err)
+	}
+	if got, want := picker.Syntax(), "SUMIF(criteria_range, criteria, [sum_range])"; got != want {
+		t.Fatalf("syntax = %q, want %q", got, want)
 	}
 }
