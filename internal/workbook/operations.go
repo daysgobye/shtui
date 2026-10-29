@@ -215,6 +215,73 @@ func InsertColumns(session *Session, sheetName string, at, count int) error {
 	})
 	return nil
 }
+// DeleteRows removes count rows beginning at the zero-based row at.
+func DeleteRows(session *Session, sheetName string, at, count int) error {
+	if err := validateDeletion(session, sheetName, at, count); err != nil {
+		return err
+	}
+	before, err := captureSession(session)
+	if err != nil {
+		return fmt.Errorf("prepare row delete undo: %w", err)
+	}
+	if err := shiftRows(session, sheetName, at, count, false); err != nil {
+		_ = restoreSession(session, before)
+		return err
+	}
+	idx, _ := sheetIndex(session.Workbook, sheetName)
+	updateSheetDimensions(&session.Workbook.Sheets[idx])
+	after, err := captureSession(session)
+	if err != nil {
+		_ = restoreSession(session, before)
+		return fmt.Errorf("prepare row delete redo: %w", err)
+	}
+	recordHistory(session, historyEntry{
+		undo: func() error { return restoreSession(session, before) },
+		redo: func() error { return restoreSession(session, after) },
+	})
+	return nil
+}
+
+// DeleteColumns removes count columns beginning at the zero-based column at.
+func DeleteColumns(session *Session, sheetName string, at, count int) error {
+	if err := validateDeletion(session, sheetName, at, count); err != nil {
+		return err
+	}
+	before, err := captureSession(session)
+	if err != nil {
+		return fmt.Errorf("prepare column delete undo: %w", err)
+	}
+	if err := shiftColumns(session, sheetName, at, count, false); err != nil {
+		_ = restoreSession(session, before)
+		return err
+	}
+	idx, _ := sheetIndex(session.Workbook, sheetName)
+	updateSheetDimensions(&session.Workbook.Sheets[idx])
+	after, err := captureSession(session)
+	if err != nil {
+		_ = restoreSession(session, before)
+		return fmt.Errorf("prepare column delete redo: %w", err)
+	}
+	recordHistory(session, historyEntry{
+		undo: func() error { return restoreSession(session, before) },
+		redo: func() error { return restoreSession(session, after) },
+	})
+	return nil
+}
+
+func validateDeletion(session *Session, sheetName string, at, count int) error {
+	if session == nil || session.Workbook == nil {
+		return fmt.Errorf("delete cells: session is nil")
+	}
+	if at < 0 || count <= 0 {
+		return fmt.Errorf("delete cells: position must be nonnegative and count positive")
+	}
+	if _, exists := sheetIndex(session.Workbook, sheetName); !exists {
+		return fmt.Errorf("delete cells: sheet %q does not exist", sheetName)
+	}
+	return ensureCalculationFile(session)
+}
+
 
 func validateInsertion(session *Session, sheetName string, at, count int) error {
 	if session == nil || session.Workbook == nil {
@@ -378,6 +445,72 @@ func setSheetDimensions(session *Session, name string, rows, cols int) {
 		session.Workbook.Sheets[idx].Rows = rows
 		session.Workbook.Sheets[idx].Cols = cols
 	}
+}
+
+// DuplicateSheet copies a worksheet's modeled state and activates the copy.
+func DuplicateSheet(session *Session, sourceName, newName string) error {
+	if session == nil || session.Workbook == nil {
+		return fmt.Errorf("duplicate sheet: session is nil")
+	}
+	if err := ensureCalculationFile(session); err != nil {
+		return err
+	}
+	sourceIndex, exists := sheetIndex(session.Workbook, sourceName)
+	if !exists {
+		return fmt.Errorf("duplicate sheet: sheet %q does not exist", sourceName)
+	}
+	if err := validateNewSheetName(session.Workbook, newName); err != nil {
+		return err
+	}
+	before, err := captureSession(session)
+	if err != nil {
+		return fmt.Errorf("prepare sheet duplicate undo: %w", err)
+	}
+	targetIndex, err := session.file.NewSheet(newName)
+	if err != nil {
+		return fmt.Errorf("duplicate sheet %q as %q: %w", sourceName, newName, err)
+	}
+	if err := session.file.CopySheet(sourceIndex, targetIndex); err != nil {
+		_ = restoreSession(session, before)
+		return fmt.Errorf("copy sheet %q: %w", sourceName, err)
+	}
+	sheet := cloneSheet(session.Workbook.Sheets[sourceIndex])
+	sheet.Name = newName
+	session.Workbook.Sheets = append(session.Workbook.Sheets, sheet)
+	session.Workbook.ActiveSheet = targetIndex
+	session.file.SetActiveSheet(targetIndex)
+	session.Workbook.Dirty = true
+	after, err := captureSession(session)
+	if err != nil {
+		_ = restoreSession(session, before)
+		return fmt.Errorf("prepare sheet duplicate redo: %w", err)
+	}
+	recordHistory(session, historyEntry{
+		undo: func() error { return restoreSession(session, before) },
+		redo: func() error { return restoreSession(session, after) },
+	})
+	return nil
+}
+
+func cloneSheet(source Sheet) Sheet {
+	copy := source
+	copy.Cells = make(map[Coord]Cell, len(source.Cells))
+	for coord, cell := range source.Cells {
+		copy.Cells[coord] = cell
+	}
+	copy.ColumnWidths = make(map[int]float64, len(source.ColumnWidths))
+	for col, width := range source.ColumnWidths {
+		copy.ColumnWidths[col] = width
+	}
+	copy.Merges = append([]CellRange(nil), source.Merges...)
+	copy.ConditionalRules = append([]ConditionalRule(nil), source.ConditionalRules...)
+	for index := range copy.ConditionalRules {
+		if scale := copy.ConditionalRules[index].ColorScale; scale != nil {
+			cloned := *scale
+			copy.ConditionalRules[index].ColorScale = &cloned
+		}
+	}
+	return copy
 }
 
 // AddSheet appends a sheet and makes it active.

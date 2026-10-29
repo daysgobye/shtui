@@ -195,6 +195,148 @@ func TestSheetOperationsMaintainActiveSheet(t *testing.T) {
 		t.Fatalf("undo add left invalid workbook: active=%d sheets=%d", session.Workbook.ActiveSheet, len(session.Workbook.Sheets))
 	}
 }
+func TestDeleteRowsShiftsCellsAndFormulaReferencesUndoRedo(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	setCellInputs(t, session, map[Coord]string{
+		{Row: 0, Col: 0}: "1",
+		{Row: 1, Col: 0}: "2",
+		{Row: 3, Col: 0}: "4",
+		{Row: 4, Col: 1}: "=A4",
+	})
+	if err := SetCell(session, CellAddress{Sheet: "Other", Row: 0, Col: 0}, "=Sheet1!A4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRows(session, "Sheet1", 1, 2); err != nil {
+		t.Fatalf("DeleteRows: %v", err)
+	}
+	sheet := session.Workbook.Sheets[0]
+	if sheet.Cells[Coord{Row: 1, Col: 0}].Input != "4" || sheet.Cells[Coord{Row: 2, Col: 1}].Input != "=A2" {
+		t.Fatalf("cells after deletion = %#v", sheet.Cells)
+	}
+	if sheet.Rows != 3 || sheet.Cols != 2 {
+		t.Fatalf("dimensions after deletion = (%d,%d), want (3,2)", sheet.Rows, sheet.Cols)
+	}
+	if got := session.Workbook.Sheets[1].Cells[Coord{Row: 0, Col: 0}].Input; got != "=Sheet1!A2" {
+		t.Fatalf("cross-sheet formula = %q, want =Sheet1!A2", got)
+	}
+	if err := Undo(session); err != nil {
+		t.Fatalf("Undo deletion: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{Row: 3, Col: 0}].Input; got != "4" {
+		t.Fatalf("undo lost deleted row data: %q", got)
+	}
+	if got := session.Workbook.Sheets[1].Cells[Coord{Row: 0, Col: 0}].Input; got != "=Sheet1!A4" {
+		t.Fatalf("formula after undo = %q", got)
+	}
+	if err := Redo(session); err != nil {
+		t.Fatalf("Redo deletion: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{Row: 2, Col: 1}].Input; got != "=A2" {
+		t.Fatalf("formula after redo = %q, want =A2", got)
+	}
+}
+
+func TestDeleteColumnsShiftsCellsWidthsAndFormulaReferencesUndoRedo(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	setCellInputs(t, session, map[Coord]string{
+		{Row: 0, Col: 0}: "1",
+		{Row: 0, Col: 1}: "2",
+		{Row: 1, Col: 3}: "4",
+		{Row: 2, Col: 4}: "=D2",
+	})
+	if err := SetColumnWidth(session, "Sheet1", 1, 12); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetColumnWidth(session, "Sheet1", 3, 24); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCell(session, CellAddress{Sheet: "Other", Row: 0, Col: 0}, "=Sheet1!D2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteColumns(session, "Sheet1", 1, 2); err != nil {
+		t.Fatalf("DeleteColumns: %v", err)
+	}
+	sheet := session.Workbook.Sheets[0]
+	if sheet.Cells[Coord{Row: 1, Col: 1}].Input != "4" || sheet.Cells[Coord{Row: 2, Col: 2}].Input != "=B2" {
+		t.Fatalf("cells after deletion = %#v", sheet.Cells)
+	}
+	if sheet.ColumnWidths[1] != 24 || len(sheet.ColumnWidths) != 1 {
+		t.Fatalf("column widths after deletion = %#v", sheet.ColumnWidths)
+	}
+	if sheet.Rows != 3 || sheet.Cols != 3 {
+		t.Fatalf("dimensions after deletion = (%d,%d), want (3,3)", sheet.Rows, sheet.Cols)
+	}
+	if got := session.Workbook.Sheets[1].Cells[Coord{Row: 0, Col: 0}].Input; got != "=Sheet1!B2" {
+		t.Fatalf("cross-sheet formula = %q, want =Sheet1!B2", got)
+	}
+	if err := Undo(session); err != nil {
+		t.Fatalf("Undo deletion: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{Row: 1, Col: 3}].Input; got != "4" || session.Workbook.Sheets[0].ColumnWidths[3] != 24 {
+		t.Fatalf("undo failed to restore column: cell=%q widths=%#v", got, session.Workbook.Sheets[0].ColumnWidths)
+	}
+	if err := Redo(session); err != nil {
+		t.Fatalf("Redo deletion: %v", err)
+	}
+	if got := session.Workbook.Sheets[0].Cells[Coord{Row: 2, Col: 2}].Input; got != "=B2" {
+		t.Fatalf("formula after redo = %q, want =B2", got)
+	}
+}
+
+func TestDuplicateSheetCopiesSupportedStateAndFormulaTextUndoRedo(t *testing.T) {
+	session := newOperationSession(t)
+	setCellInputs(t, session, map[Coord]string{
+		{Row: 0, Col: 0}: "5",
+		{Row: 0, Col: 1}: "=SUM(A1:A1)",
+	})
+	if err := ApplyStyle(session, "Sheet1", CellRange{Start: Coord{Row: 0, Col: 0}, End: Coord{Row: 0, Col: 0}}, CellStyle{FillRGB: "112233", Bold: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetColumnWidth(session, "Sheet1", 2, 18); err != nil {
+		t.Fatal(err)
+	}
+	merge := CellRange{Start: Coord{Row: 2, Col: 0}, End: Coord{Row: 2, Col: 1}}
+	if _, err := MergeRange(session, "Sheet1", merge, true); err != nil {
+		t.Fatal(err)
+	}
+	rule := ConditionalRule{Range: CellRange{Start: Coord{Row: 0, Col: 0}, End: Coord{Row: 1, Col: 0}}, Operator: GreaterThan, Value: "3", FillRGB: "abcdef"}
+	if err := AddConditionalRule(session, "Sheet1", rule.Range, rule); err != nil {
+		t.Fatal(err)
+	}
+	source := &session.Workbook.Sheets[0]
+	if err := DuplicateSheet(session, "Sheet1", "Copy"); err != nil {
+		t.Fatalf("DuplicateSheet: %v", err)
+	}
+	if session.Workbook.ActiveSheet != 1 || len(session.Workbook.Sheets) != 2 {
+		t.Fatalf("after duplication: active=%d sheets=%d", session.Workbook.ActiveSheet, len(session.Workbook.Sheets))
+	}
+	copy := session.Workbook.Sheets[1]
+	if got := copy.Cells[Coord{Row: 0, Col: 1}].Input; got != "=SUM(A1:A1)" {
+		t.Fatalf("copied formula = %q, want exact formula text", got)
+	}
+	if copy.Cells[Coord{Row: 0, Col: 0}].Style != source.Cells[Coord{Row: 0, Col: 0}].Style || copy.ColumnWidths[2] != 18 ||
+		!reflect.DeepEqual(copy.Merges, source.Merges) || !reflect.DeepEqual(copy.ConditionalRules, source.ConditionalRules) {
+		t.Fatalf("copied supported state mismatch: %#v", copy)
+	}
+	if err := Undo(session); err != nil {
+		t.Fatalf("Undo duplication: %v", err)
+	}
+	if len(session.Workbook.Sheets) != 1 || session.Workbook.ActiveSheet != 0 {
+		t.Fatalf("undo duplication: active=%d sheets=%d", session.Workbook.ActiveSheet, len(session.Workbook.Sheets))
+	}
+	if err := Redo(session); err != nil {
+		t.Fatalf("Redo duplication: %v", err)
+	}
+	if session.Workbook.ActiveSheet != 1 || session.Workbook.Sheets[1].Cells[Coord{Row: 0, Col: 1}].Input != "=SUM(A1:A1)" {
+		t.Fatalf("redo duplication did not restore active copied sheet: active=%d", session.Workbook.ActiveSheet)
+	}
+}
 
 func newOperationSession(t *testing.T) *Session {
 	t.Helper()
