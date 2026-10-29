@@ -32,18 +32,28 @@ func matchesSUMIFCriteria(value, criteria string) (bool, error) {
 	if operator != "=" && operator != "<>" {
 		left, leftErr := strconv.ParseFloat(value, 64)
 		right, rightErr := strconv.ParseFloat(operand, 64)
-		if leftErr != nil || rightErr != nil {
-			return false, nil
+		if leftErr == nil && rightErr == nil {
+			switch operator {
+			case ">":
+				return left > right, nil
+			case "<":
+				return left < right, nil
+			case ">=":
+				return left >= right, nil
+			case "<=":
+				return left <= right, nil
+			}
 		}
+		leftText, rightText := strings.ToLower(value), strings.ToLower(operand)
 		switch operator {
 		case ">":
-			return left > right, nil
+			return leftText > rightText, nil
 		case "<":
-			return left < right, nil
+			return leftText < rightText, nil
 		case ">=":
-			return left >= right, nil
+			return leftText >= rightText, nil
 		case "<=":
-			return left <= right, nil
+			return leftText <= rightText, nil
 		}
 	}
 
@@ -63,21 +73,23 @@ func matchesSUMIFCriteria(value, criteria string) (bool, error) {
 
 func sumifWildcardPattern(operand string) (string, error) {
 	var pattern strings.Builder
-	for index := 0; index < len(operand); index++ {
-		switch operand[index] {
+	runes := []rune(operand)
+	for index := 0; index < len(runes); index++ {
+		switch runes[index] {
 		case '~':
 			index++
-			if index == len(operand) {
+			if index == len(runes) {
 				return "", fmt.Errorf("trailing escape")
 			}
-			pattern.WriteString(regexp.QuoteMeta(operand[index : index+1]))
+			pattern.WriteString(regexp.QuoteMeta(string(runes[index])))
 		case '*':
 			pattern.WriteString(".*")
 		case '?':
 			pattern.WriteByte('.')
 		default:
-			pattern.WriteString(regexp.QuoteMeta(operand[index : index+1]))
+			pattern.WriteString(regexp.QuoteMeta(string(runes[index])))
 		}
 	}
 	return pattern.String(), nil
 }
+

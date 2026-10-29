@@ -28,7 +28,44 @@ func TestSUMIFCriteriaNumericComparisons(t *testing.T) {
 		{"5", ">4", true}, {"5", ">5", false}, {"5", ">=5", true},
 		{"5", "<6", true}, {"5", "<5", false}, {"5", "<=5", true},
 		{"5", "=5", true}, {"5", "<>5", false}, {"5", "<>4", true},
-		{"not a number", ">4", false},
+		{"not a number", ">4", true},
+	} {
+		got, err := matchesSUMIFCriteria(test.value, test.criteria)
+		if err != nil || got != test.want {
+			t.Errorf("matchesSUMIFCriteria(%q, %q) = %v, %v; want %v, nil", test.value, test.criteria, got, err, test.want)
+		}
+	}
+}
+
+func TestSUMIFCriteriaTextComparisons(t *testing.T) {
+	for _, test := range []struct {
+		value, criteria string
+		want bool
+	}{
+		{"apple", ">Banana", false},
+		{"pear", ">Apple", true},
+		{"APPLE", ">=apple", true},
+		{"Banana", "<pear", true},
+		{"pear", "<=Pear", true},
+		{"apple", "<>banana", true},
+		{"pear", ">4", true},
+	} {
+		got, err := matchesSUMIFCriteria(test.value, test.criteria)
+		if err != nil || got != test.want {
+			t.Errorf("matchesSUMIFCriteria(%q, %q) = %v, %v; want %v, nil", test.value, test.criteria, got, err, test.want)
+		}
+	}
+}
+
+func TestSUMIFCriteriaUnicodeLiterals(t *testing.T) {
+	for _, test := range []struct {
+		value, criteria string
+		want bool
+	}{
+		{"café", "café", true},
+		{"café latte", "café*", true},
+		{"猫", "猫", true},
+		{"😀!", "😀~!", true},
 	} {
 		got, err := matchesSUMIFCriteria(test.value, test.criteria)
 		if err != nil || got != test.want {
