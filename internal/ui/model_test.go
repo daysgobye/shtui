@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -345,6 +346,115 @@ func TestFunctionPickerAcceptsAllThreeIFArguments(t *testing.T) {
 	result := model.session.Workbook.Sheets[0].Cells[workbook.Coord{Col: 1}]
 	if result.Input != `=IF(A1>0,"yes","no")` || result.Result != "yes" {
 		t.Fatalf("IF result = (%q, %q), want (=IF(A1>0,\"yes\",\"no\"), yes)", result.Input, result.Result)
+	}
+}
+type testClipboard struct {
+	text      string
+	readErr   error
+	writeErr  error
+	writeText string
+}
+
+func (clipboard *testClipboard) Read() (string, error) { return clipboard.text, clipboard.readErr }
+func (clipboard *testClipboard) Write(text string) error {
+	clipboard.writeText = text
+	return clipboard.writeErr
+}
+
+func TestClipboardShortcutsOperateOnSelectedRange(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	clipboard := &testClipboard{}
+	model.clipboard = clipboard
+	sheet := model.activeSheet()
+	sheet.Cells[workbook.Coord{Row: 0, Col: 0}] = workbook.Cell{Input: "=1+2"}
+	sheet.Cells[workbook.Coord{Row: 1, Col: 1}] = workbook.Cell{Input: "edge"}
+	model.Grid.Selection = workbook.CellRange{Start: workbook.Coord{}, End: workbook.Coord{Row: 1, Col: 1}}
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ctrl+shift+c")})
+	if clipboard.writeText != "=1+2\t\n\tedge" {
+		t.Fatalf("copied TSV = %q, want rectangular values with empty edges", clipboard.writeText)
+	}
+	model.selectCell(workbook.Coord{Row: 3, Col: 3})
+	clipboard.text = "=A1\tB1\n\t"
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if got := sheet.Cells[workbook.Coord{Row: 3, Col: 3}].Input; got != "=A1" {
+		t.Fatalf("pasted formula input = %q, want =A1", got)
+	}
+}
+
+func TestClipboardCutFailurePreservesSource(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	model.Grid.Selected = workbook.Coord{}
+	if err := workbook.SetCell(model.session, workbook.CellAddress{Sheet: model.activeSheet().Name}, "keep"); err != nil {
+		t.Fatal(err)
+	}
+	clipboard := &testClipboard{writeErr: errors.New("clipboard unavailable")}
+	model.clipboard = clipboard
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if got := model.activeSheet().Cells[workbook.Coord{}].Input; got != "keep" {
+		t.Fatalf("cut failure changed source to %q", got)
+	}
+	if !strings.Contains(model.status, "clipboard unavailable") {
+		t.Fatalf("status = %q, want clipboard error", model.status)
+	}
+}
+
+func TestPaletteClipboardAndStructuralCommands(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	clipboard := &testClipboard{}
+	model.clipboard = clipboard
+	want := map[string]bool{
+		"copy": true, "cut": true, "paste": true, "copy-row": true, "cut-row": true,
+		"delete-row": true, "delete-column": true, "duplicate-sheet": true,
+	}
+	for _, item := range newPaletteItems(model.keys) {
+		paletteItem, ok := item.(paletteItem)
+		if ok {
+			delete(want, paletteItem.command.ID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("palette lacks commands: %#v", want)
+	}
+	model.runCommand("duplicate-sheet")
+	if len(model.session.Workbook.Sheets) != 2 {
+		t.Fatalf("sheets = %d, want duplicate sheet", len(model.session.Workbook.Sheets))
+	}
+}
+
+func TestCopyCutRowUseActiveCellRow(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	clipboard := &testClipboard{}
+	model.clipboard = clipboard
+	model.activeSheet().Cells[workbook.Coord{Row: 0, Col: 0}] = workbook.Cell{Input: "other"}
+	model.activeSheet().Cells[workbook.Coord{Row: 2, Col: 2}] = workbook.Cell{Input: "row"}
+	model.Grid.Selected = workbook.Coord{Row: 2, Col: 2}
+	model.runCommand("copy-row")
+	if clipboard.writeText != "\t\trow" {
+		t.Fatalf("copied row TSV = %q, want used-column span", clipboard.writeText)
+	}
+	model.runCommand("cut-row")
+	if got := model.activeSheet().Cells[workbook.Coord{Row: 0, Col: 0}].Input; got != "other" {
+		t.Fatalf("cut row changed another row to %q", got)
+	}
+	if got := model.activeSheet().Cells[workbook.Coord{Row: 2, Col: 2}].Input; got != "" {
+		t.Fatalf("cut row left active row input %q", got)
+	}
+}
+
+func TestClipboardModalPrecedenceAndCtrlCQuit(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	clipboard := &testClipboard{}
+	model.clipboard = clipboard
+	model.Palette.Open = true
+	clipboard.text = "must not paste"
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if len(model.activeSheet().Cells) != 0 {
+		t.Fatal("clipboard shortcut leaked through palette modal")
+	}
+	model.Palette.Open = false
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if model.TakeCommand() != "" {
+		t.Fatal("Ctrl+C was consumed as a spreadsheet command")
 	}
 }
 

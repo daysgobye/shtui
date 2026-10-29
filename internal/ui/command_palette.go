@@ -30,6 +30,14 @@ func (item paletteItem) Description() string {
 
 func newPaletteItems(keys KeyMap) []list.Item {
 	commands := []paletteCommand{
+		{ID: "copy", Name: "Copy"},
+		{ID: "cut", Name: "Cut"},
+		{ID: "paste", Name: "Paste"},
+		{ID: "copy-row", Name: "Copy row"},
+		{ID: "cut-row", Name: "Cut row"},
+		{ID: "delete-row", Name: "Delete row"},
+		{ID: "delete-column", Name: "Delete column"},
+		{ID: "duplicate-sheet", Name: "Duplicate sheet"},
 		{ID: "toggle-toolbar", Name: "Toggle toolbar"},
 		{ID: "hide-toolbar", Name: "Hide toolbar"},
 		{ID: "show-toolbar", Name: "Show toolbar"},

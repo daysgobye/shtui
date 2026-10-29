@@ -645,7 +645,7 @@ func Run(ctx context.Context, path string) error {
 		ctx = context.Background()
 	}
 	controller := NewController(path)
-	program := tea.NewProgram(controller, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
+	program := tea.NewProgram(controller, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx), withKittyKeyboardProtocol(os.Stdout), tea.WithFilter(filterKittyKey))
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("run terminal app: %w", err)
 	}

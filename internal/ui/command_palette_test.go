@@ -80,8 +80,8 @@ func TestCommandPaletteShowsActionsBeforeSearch(t *testing.T) {
 	palette := NewCommandPalette(DefaultKeyMap())
 	palette.Show()
 	view := palette.View(80)
-	if !strings.Contains(view, "Toggle toolbar") {
-		t.Fatalf("opening palette did not show available commands before filtering: %q", view)
+	if !strings.Contains(view, "Copy") || !strings.Contains(view, "Paste") {
+		t.Fatalf("opening palette did not show available clipboard commands before filtering: %q", view)
 	}
 }
 

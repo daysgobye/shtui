@@ -26,6 +26,9 @@ type KeyMap struct {
 	MoveDown      key.Binding
 	MoveLeft      key.Binding
 	MoveRight     key.Binding
+	Copy          key.Binding
+	Cut           key.Binding
+	Paste         key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -47,6 +50,9 @@ func DefaultKeyMap() KeyMap {
 		MoveDown:      key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "move down")),
 		MoveLeft:      key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "move left")),
 		MoveRight:     key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "move right")),
+		Copy:          key.NewBinding(key.WithKeys("ctrl+shift+c"), key.WithHelp("Ctrl+Shift+C", "copy")),
+		Cut:           key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("Ctrl+X", "cut")),
+		Paste:         key.NewBinding(key.WithKeys("ctrl+v"), key.WithHelp("Ctrl+V", "paste")),
 	}
 }
 
@@ -76,6 +82,12 @@ func (keys KeyMap) FullHelp() [][]key.Binding {
 func (keys KeyMap) Shortcut(commandID string) string {
 	var binding key.Binding
 	switch commandID {
+	case "copy":
+		binding = keys.Copy
+	case "cut":
+		binding = keys.Cut
+	case "paste":
+		binding = keys.Paste
 	case "open-file":
 		binding = keys.OpenFile
 	case "save":

@@ -44,6 +44,7 @@ type AppModel struct {
 	renameSheetDialog   renameSheetDialogState
 	home                homeScreen
 	keys                KeyMap
+	clipboard           Clipboard
 	Theme               ThemePalette
 	ColorPicker         colorPickerState
 	toolbarVisible      bool
@@ -239,6 +240,12 @@ func (model *AppModel) handleKey(message tea.KeyMsg) {
 		return
 	}
 	switch {
+	case model.keys.Matches(message, model.keys.Copy):
+		model.runCommand("copy")
+	case model.keys.Matches(message, model.keys.Cut):
+		model.runCommand("cut")
+	case model.keys.Matches(message, model.keys.Paste):
+		model.runCommand("paste")
 	case model.keys.Matches(message, model.keys.Undo):
 		err := workbook.Undo(model.session)
 		model.setStatus(err)
@@ -522,6 +529,25 @@ func (model *AppModel) runCommand(command string) {
 		}
 	}
 	switch command {
+	case "copy", "cut":
+		model.copySelection(command == "cut")
+	case "paste":
+		model.pasteSelection()
+	case "copy-row", "cut-row":
+		model.copyRow(command == "cut-row")
+	case "delete-row":
+		err := workbook.DeleteRows(model.session, model.activeSheet().Name, model.Grid.Selected.Row, 1)
+		model.setStatus(err)
+	case "delete-column":
+		err := workbook.DeleteColumns(model.session, model.activeSheet().Name, model.Grid.Selected.Col, 1)
+		model.setStatus(err)
+	case "duplicate-sheet":
+		name := model.uniqueDuplicateSheetName()
+		err := workbook.DuplicateSheet(model.session, model.activeSheet().Name, name)
+		model.setStatus(err)
+		if err == nil {
+			model.recordActionSummary("Duplicated sheet as " + name)
+		}
 	case "toggle-toolbar":
 		model.ToggleToolbar()
 	case "hide-toolbar":
