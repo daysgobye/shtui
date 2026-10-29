@@ -77,6 +77,48 @@ func PasteRange(session *Session, address CellAddress, rows [][]string) error {
 	return nil
 }
 
+// ClearRange clears every cell in the inclusive selection as one undoable operation.
+func ClearRange(session *Session, sheetName string, selection CellRange) error {
+	if session == nil || session.Workbook == nil {
+		return fmt.Errorf("clear range: session is nil")
+	}
+	idx, exists := sheetIndex(session.Workbook, sheetName)
+	if !exists {
+		return fmt.Errorf("clear range: sheet %q does not exist", sheetName)
+	}
+	if selection.Start.Row > selection.End.Row {
+		selection.Start.Row, selection.End.Row = selection.End.Row, selection.Start.Row
+	}
+	if selection.Start.Col > selection.End.Col {
+		selection.Start.Col, selection.End.Col = selection.End.Col, selection.Start.Col
+	}
+	if err := validateCellRange(selection); err != nil {
+		return fmt.Errorf("clear range: %w", err)
+	}
+	before := make(map[Coord]cellState)
+	after := make(map[Coord]cellState)
+	sheet := &session.Workbook.Sheets[idx]
+	for row := selection.Start.Row; row <= selection.End.Row; row++ {
+		for col := selection.Start.Col; col <= selection.End.Col; col++ {
+			coord := Coord{Row: row, Col: col}
+			old := cellStateAt(sheet, coord)
+			next := stateForInput(old, "")
+			if old != next {
+				before[coord], after[coord] = old, next
+			}
+		}
+	}
+	if len(after) == 0 {
+		return nil
+	}
+	if err := applyCellStates(session, sheetName, after); err != nil {
+		_ = applyCellStates(session, sheetName, before)
+		return err
+	}
+	recordCellHistory(session, sheetName, before, after)
+	return nil
+}
+
 func validateCellRange(selection CellRange) error {
 	if selection.Start.Row < 0 || selection.Start.Col < 0 || selection.End.Row < selection.Start.Row || selection.End.Col < selection.Start.Col {
 		return fmt.Errorf("invalid inclusive range (%d,%d)-(%d,%d)", selection.Start.Row, selection.Start.Col, selection.End.Row, selection.End.Col)
