@@ -421,6 +421,32 @@ func TestPaletteClipboardAndStructuralCommands(t *testing.T) {
 	}
 }
 
+func TestPaletteDeletesRowAndColumnAtActiveCell(t *testing.T) {
+	model := newInteractionModel(t, 1)
+	sheetName := model.activeSheet().Name
+	for address, value := range map[workbook.CellAddress]string{
+		{Sheet: sheetName, Row: 0, Col: 0}: "top",
+		{Sheet: sheetName, Row: 1, Col: 0}: "below",
+		{Sheet: sheetName, Row: 1, Col: 1}: "right",
+	} {
+		if err := workbook.SetCell(model.session, address, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model.Grid.Selected = workbook.Coord{}
+	model.runCommand("delete-row")
+	if got := model.activeSheet().Cells[workbook.Coord{Row: 0, Col: 0}].Input; got != "below" {
+		t.Fatalf("first cell after deleting active row = %q, want shifted row value", got)
+	}
+	if got := model.activeSheet().Cells[workbook.Coord{Row: 0, Col: 1}].Input; got != "right" {
+		t.Fatalf("second cell after deleting active row = %q, want shifted row value", got)
+	}
+	model.runCommand("delete-column")
+	if got := model.activeSheet().Cells[workbook.Coord{Row: 0, Col: 0}].Input; got != "right" {
+		t.Fatalf("first cell after deleting active column = %q, want shifted column value", got)
+	}
+}
+
 func TestCopyCutRowUseActiveCellRow(t *testing.T) {
 	model := newInteractionModel(t, 1)
 	clipboard := &testClipboard{}
