@@ -778,35 +778,43 @@ func transformFormulaReferences(formula, formulaSheet, targetSheet string, colum
 				}
 				rangeStart, rangeEnd := min(startCoord, endCoord), max(startCoord, endCoord)
 				deletedStart, deletedEnd := threshold+delta, threshold-1
-				survivesBefore, survivesAfter := rangeStart < deletedStart, rangeEnd > deletedEnd
-				if !survivesBefore && !survivesAfter {
-					output.WriteString("#REF!")
-				} else {
-					newLow, newHigh := rangeStart, rangeEnd
-					switch {
-					case survivesBefore && survivesAfter:
-						newHigh += delta
-					case survivesBefore:
-						newHigh = deletedStart - 1
-					case survivesAfter:
-						newLow = deletedStart
-						newHigh += delta
+				formatEndpoint := func(ref formulaReference, value int) string {
+					if columns {
+						ref.columnNumber = value + 1
+					} else {
+						ref.row = value + 1
 					}
-					newStart, newEnd := newLow, newHigh
-					if startCoord > endCoord {
-						newStart, newEnd = newHigh, newLow
-					}
-					formatEndpoint := func(ref formulaReference, value int) string {
-						if columns {
-							ref.columnNumber = value + 1
-						} else {
-							ref.row = value + 1
-						}
-						return formatFormulaReference(ref)
-					}
-					output.WriteString(formatEndpoint(startReference, newStart))
+					return formatFormulaReference(ref)
+				}
+				if rangeEnd < deletedStart {
+					output.WriteString(formula[starts[endpointIndex]:endReference.end])
+				} else if rangeStart > deletedEnd {
+					output.WriteString(formatEndpoint(startReference, startCoord+delta))
 					output.WriteByte(':')
-					output.WriteString(formatEndpoint(endReference, newEnd))
+					output.WriteString(formatEndpoint(endReference, endCoord+delta))
+				} else {
+					survivesBefore, survivesAfter := rangeStart < deletedStart, rangeEnd > deletedEnd
+					if !survivesBefore && !survivesAfter {
+						output.WriteString("#REF!")
+					} else {
+						newLow, newHigh := rangeStart, rangeEnd
+						switch {
+						case survivesBefore && survivesAfter:
+							newHigh += delta
+						case survivesBefore:
+							newHigh = deletedStart - 1
+						case survivesAfter:
+							newLow = deletedStart
+							newHigh += delta
+						}
+						newStart, newEnd := newLow, newHigh
+						if startCoord > endCoord {
+							newStart, newEnd = newHigh, newLow
+						}
+						output.WriteString(formatEndpoint(startReference, newStart))
+						output.WriteByte(':')
+						output.WriteString(formatEndpoint(endReference, newEnd))
+					}
 				}
 				index = endReference.end
 				referenceIndex = endpointIndex + 2
