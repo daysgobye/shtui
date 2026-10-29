@@ -186,6 +186,35 @@ func TestSUMIFSourceEditRecalculatesTotal(t *testing.T) {
 	}
 }
 
+func TestSUMIFUsesRecalculatedFormulaSumRange(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "1")
+	setFormula(t, session, "Sheet1", "B1", "A1*2")
+	formula := `SUMIF(A1:A1,">0",B1:B1)`
+	setFormula(t, session, "Sheet1", "C1", formula)
+	address := CellAddress{Sheet: "Sheet1"}
+	if err := Recalculate(session, address); err != nil {
+		t.Fatalf("initial Recalculate: %v", err)
+	}
+	if got := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 1}).Result; got != "2" {
+		t.Fatalf("initial formula sum range = %q, want 2", got)
+	}
+
+	setFormulaLiteral(t, session, "Sheet1", "A1", "3")
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}); err != nil {
+		t.Fatalf("Recalculate after source edit: %v", err)
+	}
+	sumRange := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 1})
+	sumif := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if sumRange.Result != "6" || sumRange.CalculationState != Current {
+		t.Fatalf("formula sum range = (%q, %q), want (6, current)", sumRange.Result, sumRange.CalculationState)
+	}
+	if sumif.Input != "="+formula || sumif.Result != "6" || sumif.CalculationState != Current {
+		t.Fatalf("SUMIF = (%q, %q, %q), want (%q, 6, current)", sumif.Input, sumif.Result, sumif.CalculationState, "="+formula)
+	}
+}
+
+
 func TestSUMIFDependentUsesCustomNumericCriteriaResult(t *testing.T) {
 	session := newFormulaSession(t)
 	for row, value := range []string{"2", "4", "-"} {

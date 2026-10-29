@@ -38,10 +38,19 @@ func Recalculate(session *Session, changed CellAddress) error {
 		return err
 	}
 
+	if err := recalculateFormulaResults(session); err != nil {
+		return err
+	}
 	if err := calculateSUMIFResults(session); err != nil {
 		return err
 	}
+	if err := recalculateFormulaResults(session); err != nil {
+		return err
+	}
+	return restoreSUMIFFormulas(session)
+}
 
+func recalculateFormulaResults(session *Session) error {
 	for sheetIndex := range session.Workbook.Sheets {
 		sheet := &session.Workbook.Sheets[sheetIndex]
 		for coord, cell := range sheet.Cells {
@@ -92,7 +101,7 @@ func Recalculate(session *Session, changed CellAddress) error {
 			sheet.Cells[coord] = cell
 		}
 	}
-	return restoreSUMIFFormulas(session)
+	return nil
 }
 
 func calculateSUMIFResults(session *Session) error {
