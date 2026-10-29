@@ -186,6 +186,49 @@ func TestSUMIFSourceEditRecalculatesTotal(t *testing.T) {
 	}
 }
 
+func TestSUMIFDependentUsesCustomNumericCriteriaResult(t *testing.T) {
+	session := newFormulaSession(t)
+	for row, value := range []string{"2", "4", "-"} {
+		setFormulaLiteral(t, session, "Sheet1", mustCellName(t, row, 0), value)
+	}
+	for row, value := range []string{"10", "20", "30"} {
+		setFormulaLiteral(t, session, "Sheet1", mustCellName(t, row, 1), value)
+	}
+	setFormula(t, session, "Sheet1", "C1", `SUMIF(A1:A3,">0",B1:B3)`)
+	setFormula(t, session, "Sheet1", "D1", "C1*2")
+
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1"}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	sumif := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if sumif.Result != "30" || sumif.CalculationState != Current {
+		t.Fatalf("SUMIF = (%q, %q), want (30, current)", sumif.Result, sumif.CalculationState)
+	}
+	dependent := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 3})
+	if dependent.Result != "60" || dependent.CalculationState != Current {
+		t.Fatalf("dependent = (%q, %q), want (60, current)", dependent.Result, dependent.CalculationState)
+	}
+}
+
+func TestSUMIFErrorDoesNotFeedDependentFormula(t *testing.T) {
+	session := newFormulaSession(t)
+	setFormulaLiteral(t, session, "Sheet1", "A1", "2")
+	setFormulaLiteral(t, session, "Sheet1", "B1", "10")
+	setFormula(t, session, "Sheet1", "C1", `SUMIF(A1:A1,">",B1:B1)`)
+	setFormula(t, session, "Sheet1", "D1", "C1*2")
+	if err := Recalculate(session, CellAddress{Sheet: "Sheet1"}); err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	sumif := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 2})
+	if sumif.CalculationState != Error {
+		t.Fatalf("SUMIF state = %q, want error", sumif.CalculationState)
+	}
+	dependent := formulaCell(t, session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 3})
+	if dependent.CalculationState != Error || dependent.Result == "" {
+		t.Fatalf("dependent = (%q, %q), want a non-empty calculation error", dependent.Result, dependent.CalculationState)
+	}
+}
+
 func TestSUMIFMalformedCriteriaOrArgumentsSetError(t *testing.T) {
 	for _, formula := range []string{
 		`SUMIF(A1:A2,">")`,

@@ -38,6 +38,10 @@ func Recalculate(session *Session, changed CellAddress) error {
 		return err
 	}
 
+	if err := calculateSUMIFResults(session); err != nil {
+		return err
+	}
+
 	for sheetIndex := range session.Workbook.Sheets {
 		sheet := &session.Workbook.Sheets[sheetIndex]
 		for coord, cell := range sheet.Cells {
@@ -46,18 +50,13 @@ func Recalculate(session *Session, changed CellAddress) error {
 			}
 			address, err := excelize.CoordinatesToCellName(coord.Col+1, coord.Row+1)
 			if err != nil {
+				if restoreErr := restoreSUMIFFormulas(session); restoreErr != nil {
+					return restoreErr
+				}
 				return fmt.Errorf("recalculate %s!%d,%d: %w", sheet.Name, coord.Row, coord.Col, err)
 			}
 			formula := strings.TrimPrefix(cell.Input, "=")
-			if result, handled, err := evaluateSUMIF(session, sheet.Name, formula); handled {
-				if err != nil {
-					cell.CalculationState = Error
-					cell.Result = err.Error()
-				} else {
-					cell.Result = result
-					cell.CalculationState = Current
-				}
-				sheet.Cells[coord] = cell
+			if isSUMIFFormula(formula) {
 				continue
 			}
 			if hasUnsupportedFunction(formula) {
@@ -93,9 +92,64 @@ func Recalculate(session *Session, changed CellAddress) error {
 			sheet.Cells[coord] = cell
 		}
 	}
+	return restoreSUMIFFormulas(session)
+}
+
+func calculateSUMIFResults(session *Session) error {
+	for sheetIndex := range session.Workbook.Sheets {
+		sheet := &session.Workbook.Sheets[sheetIndex]
+		for coord, cell := range sheet.Cells {
+			if !strings.HasPrefix(cell.Input, "=") {
+				continue
+			}
+			formula := strings.TrimPrefix(cell.Input, "=")
+			result, handled, err := evaluateSUMIF(session, sheet.Name, formula)
+			if !handled {
+				continue
+			}
+			address, addressErr := excelize.CoordinatesToCellName(coord.Col+1, coord.Row+1)
+			if addressErr != nil {
+				if restoreErr := restoreSUMIFFormulas(session); restoreErr != nil {
+					return restoreErr
+				}
+				return fmt.Errorf("recalculate %s!%d,%d: %w", sheet.Name, coord.Row, coord.Col, addressErr)
+			}
+			if err == nil {
+				err = session.file.SetCellValue(sheet.Name, address, excelizeLiteral(result))
+			}
+			if err != nil {
+				cell.CalculationState = Error
+				cell.Result = err.Error()
+				if setErr := session.file.SetCellFormula(sheet.Name, address, "NA()"); setErr != nil {
+					if restoreErr := restoreSUMIFFormulas(session); restoreErr != nil {
+						return restoreErr
+					}
+					return fmt.Errorf("set calculation error for %s!%s: %w", sheet.Name, address, setErr)
+				}
+			} else {
+				cell.Result = result
+				cell.CalculationState = Current
+			}
+			sheet.Cells[coord] = cell
+		}
+	}
 	return nil
 }
 
+func restoreSUMIFFormulas(session *Session) error {
+	for sheetIndex := range session.Workbook.Sheets {
+		sheet := &session.Workbook.Sheets[sheetIndex]
+		for coord, cell := range sheet.Cells {
+			if !strings.HasPrefix(cell.Input, "=") || !isSUMIFFormula(strings.TrimPrefix(cell.Input, "=")) {
+				continue
+			}
+			if err := writeFormulaInput(session.file, sheet.Name, coord, cell.Input); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 func ensureCalculationFile(session *Session) error {
 	if session.file != nil {
 		return nil
