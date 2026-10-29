@@ -239,6 +239,74 @@ func TestDeleteRowsShiftsCellsAndFormulaReferencesUndoRedo(t *testing.T) {
 	}
 }
 
+func TestDeleteRowsInvalidatesReferencesIntoDeletedRowsUndoRedo(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCell(session, CellAddress{Sheet: "Sheet1", Row: 1, Col: 0}, "2"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=Sheet1!A2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRows(session, "Sheet1", 1, 1); err != nil {
+		t.Fatalf("DeleteRows: %v", err)
+	}
+	assertOperationCell(t, session, formulaAddress, "=#REF!", "#REF!")
+	if err := Undo(session); err != nil {
+		t.Fatalf("Undo deletion: %v", err)
+	}
+	if got := session.Workbook.Sheets[1].Cells[Coord{Row: 0, Col: 0}].Input; got != "=Sheet1!A2" {
+		t.Fatalf("formula after undo = %q, want =Sheet1!A2", got)
+	}
+	if err := Redo(session); err != nil {
+		t.Fatalf("Redo deletion: %v", err)
+	}
+	assertOperationCell(t, session, formulaAddress, "=#REF!", "#REF!")
+}
+
+func TestDeleteColumnsInvalidatesReferencesIntoDeletedColumnsUndoRedo(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCell(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 1}, "2"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=Sheet1!B1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteColumns(session, "Sheet1", 1, 1); err != nil {
+		t.Fatalf("DeleteColumns: %v", err)
+	}
+	assertOperationCell(t, session, formulaAddress, "=#REF!", "#REF!")
+	if err := Undo(session); err != nil {
+		t.Fatalf("Undo deletion: %v", err)
+	}
+	if got := session.Workbook.Sheets[1].Cells[Coord{Row: 0, Col: 0}].Input; got != "=Sheet1!B1" {
+		t.Fatalf("formula after undo = %q, want =Sheet1!B1", got)
+	}
+	if err := Redo(session); err != nil {
+		t.Fatalf("Redo deletion: %v", err)
+	}
+	assertOperationCell(t, session, formulaAddress, "=#REF!", "#REF!")
+}
+
+func assertOperationCell(t *testing.T, session *Session, address CellAddress, input, result string) {
+	t.Helper()
+	index, exists := sheetIndex(session.Workbook, address.Sheet)
+	if !exists {
+		t.Fatalf("sheet %q does not exist", address.Sheet)
+	}
+	cell := session.Workbook.Sheets[index].Cells[Coord{Row: address.Row, Col: address.Col}]
+	if cell.Input != input || cell.Result != result {
+		t.Fatalf("cell %s!%d,%d = (%q, %q), want (%q, %q)", address.Sheet, address.Row, address.Col, cell.Input, cell.Result, input, result)
+	}
+}
+
 func TestDeleteColumnsShiftsCellsWidthsAndFormulaReferencesUndoRedo(t *testing.T) {
 	session := newOperationSession(t)
 	if err := AddSheet(session, "Other"); err != nil {

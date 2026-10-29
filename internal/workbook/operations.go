@@ -427,16 +427,43 @@ func writeAllFormulaInputs(session *Session) error {
 }
 
 func recalculateWorkbook(session *Session, changedSheet string) error {
+	found := false
 	for _, sheet := range session.Workbook.Sheets {
 		if sheet.Name != changedSheet {
 			continue
 		}
+		found = true
 		for coord := range sheet.Cells {
-			return Recalculate(session, CellAddress{Sheet: sheet.Name, Row: coord.Row, Col: coord.Col})
+			if err := Recalculate(session, CellAddress{Sheet: sheet.Name, Row: coord.Row, Col: coord.Col}); err != nil {
+				return err
+			}
+			break
 		}
-		return Recalculate(session, CellAddress{Sheet: sheet.Name})
+		if len(sheet.Cells) == 0 {
+			if err := Recalculate(session, CellAddress{Sheet: sheet.Name}); err != nil {
+				return err
+			}
+		}
+		break
 	}
-	return fmt.Errorf("recalculate workbook: sheet %q does not exist", changedSheet)
+	if !found {
+		return fmt.Errorf("recalculate workbook: sheet %q does not exist", changedSheet)
+	}
+	markReferenceErrors(session.Workbook)
+	return nil
+}
+
+func markReferenceErrors(workbook *Workbook) {
+	for sheetIndex := range workbook.Sheets {
+		sheet := &workbook.Sheets[sheetIndex]
+		for coord, cell := range sheet.Cells {
+			if cell.Input == "=#REF!" {
+				cell.Result = "#REF!"
+				cell.CalculationState = Error
+				sheet.Cells[coord] = cell
+			}
+		}
+	}
 }
 
 func setSheetDimensions(session *Session, name string, rows, cols int) {
@@ -676,6 +703,7 @@ func restoreSession(session *Session, snapshot sessionSnapshot) error {
 		file.Close()
 		return err
 	}
+	markReferenceErrors(workbook)
 	workbook.ActiveSheet = min(snapshot.activeSheet, len(workbook.Sheets)-1)
 	workbook.Dirty = true
 	old := session.file
@@ -706,12 +734,21 @@ func transformFormulaReferences(formula, formulaSheet, targetSheet string, colum
 			} else if rangePending && rangeSheet != "" {
 				refSheet = rangeSheet
 			}
-			if strings.EqualFold(refSheet, targetSheet) {
+			referenceCoordinate := reference.row - 1
+			if columns {
+				referenceCoordinate = reference.columnNumber - 1
+			}
+			if delta < 0 && referenceCoordinate >= threshold+delta && referenceCoordinate < threshold {
+				output.WriteString("#REF!")
+				rangeSheet = refSheet
+				rangePending = false
+				index = reference.end
+				continue
+			}
+			if referenceCoordinate >= threshold {
 				if columns {
-					if reference.columnNumber-1 >= threshold {
-						reference.columnNumber += delta
-					}
-				} else if reference.row-1 >= threshold {
+					reference.columnNumber += delta
+				} else {
 					reference.row += delta
 				}
 			}
