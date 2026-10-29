@@ -2,6 +2,8 @@ package app
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"reflect"
 	"strconv"
 	"testing"
@@ -21,6 +23,26 @@ func TestKittyProtocolOutputWriterBracketsAlternateScreen(t *testing.T) {
 	want := "before\x1b[?1049h\x1b[>1uinside\x1b[<u\x1b[?1049lafter"
 	if got := output.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
+func TestKittyProtocolOutputPreservesTerminalFile(t *testing.T) {
+	output, err := os.CreateTemp(t.TempDir(), "terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+
+	writer := any(newKittyTerminalWriter(output))
+	terminal, ok := writer.(interface {
+		io.ReadWriteCloser
+		Fd() uintptr
+	})
+	if !ok {
+		t.Fatal("output writer no longer exposes the underlying terminal file")
+	}
+	if got, want := terminal.Fd(), output.Fd(); got != want {
+		t.Fatalf("output file descriptor = %d, want %d", got, want)
 	}
 }
 

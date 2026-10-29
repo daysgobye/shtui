@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,27 @@ const (
 	kittyEnableKeys     = "\x1b[>1u"
 	kittyRestoreKeys    = "\x1b[<u"
 )
+
+type kittyTerminalWriter struct {
+	*os.File
+	protocol *kittyProtocolWriter
+}
+
+var _ interface {
+	io.ReadWriteCloser
+	Fd() uintptr
+} = (*kittyTerminalWriter)(nil)
+
+func newKittyTerminalWriter(output *os.File) *kittyTerminalWriter {
+	return &kittyTerminalWriter{
+		File:     output,
+		protocol: newKittyProtocolWriter(output),
+	}
+}
+
+func (writer *kittyTerminalWriter) Write(data []byte) (int, error) {
+	return writer.protocol.Write(data)
+}
 
 type kittyProtocolWriter struct {
 	output  io.Writer
@@ -89,8 +111,8 @@ func writeTerminal(output io.Writer, data []byte) error {
 	return nil
 }
 
-func withKittyKeyboardProtocol(output io.Writer) tea.ProgramOption {
-	return tea.WithOutput(newKittyProtocolWriter(output))
+func withKittyKeyboardProtocol(output *os.File) tea.ProgramOption {
+	return tea.WithOutput(newKittyTerminalWriter(output))
 }
 
 func filterKittyKey(_ tea.Model, message tea.Msg) tea.Msg {
