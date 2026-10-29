@@ -308,6 +308,66 @@ func TestDeleteRowsPreservesUnrelatedAndContractsRanges(t *testing.T) {
 	}
 	assertOperationInput(t, session, formulaAddress, "=Sheet1!A1+SUM(Sheet1!A1:A4)+SUM(Sheet1!B1:B4)")
 }
+func TestDeleteRowsContractsRangeAtTrailingEndpoint(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=SUM(Sheet1!A1:A3)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRows(session, "Sheet1", 1, 2); err != nil {
+		t.Fatalf("DeleteRows: %v", err)
+	}
+	assertOperationInput(t, session, formulaAddress, "=SUM(Sheet1!A1:A1)")
+}
+
+func TestDeleteRowsContractsFirstRangeEndpoint(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=SUM(Sheet1!A2:A4)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRows(session, "Sheet1", 1, 1); err != nil {
+		t.Fatalf("DeleteRows: %v", err)
+	}
+	assertOperationInput(t, session, formulaAddress, "=SUM(Sheet1!A2:A3)")
+}
+
+func TestDeleteRowsInvalidatesEntireRange(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=SUM(Sheet1!A2:A3)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRows(session, "Sheet1", 1, 2); err != nil {
+		t.Fatalf("DeleteRows: %v", err)
+	}
+	assertOperationInput(t, session, formulaAddress, "=SUM(#REF!)")
+}
+
+
+func TestDeleteColumnsContractsRangeAtTrailingEndpoint(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=SUM(Sheet1!A1:C1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteColumns(session, "Sheet1", 1, 2); err != nil {
+		t.Fatalf("DeleteColumns: %v", err)
+	}
+	assertOperationInput(t, session, formulaAddress, "=SUM(Sheet1!A1:A1)")
+}
 
 func TestDeleteColumnsContractsPartialRanges(t *testing.T) {
 	session := newOperationSession(t)
@@ -345,7 +405,6 @@ func assertOperationInput(t *testing.T, session *Session, address CellAddress, i
 		t.Fatalf("cell %s!%d,%d input = %q, want %q", address.Sheet, address.Row, address.Col, got, input)
 	}
 }
-
 
 func TestDeleteColumnsShiftsCellsWidthsAndFormulaReferencesUndoRedo(t *testing.T) {
 	session := newOperationSession(t)

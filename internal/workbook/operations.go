@@ -215,6 +215,7 @@ func InsertColumns(session *Session, sheetName string, at, count int) error {
 	})
 	return nil
 }
+
 // DeleteRows removes count rows beginning at the zero-based row at.
 func DeleteRows(session *Session, sheetName string, at, count int) error {
 	if err := validateDeletion(session, sheetName, at, count); err != nil {
@@ -281,7 +282,6 @@ func validateDeletion(session *Session, sheetName string, at, count int) error {
 	}
 	return ensureCalculationFile(session)
 }
-
 
 func validateInsertion(session *Session, sheetName string, at, count int) error {
 	if session == nil || session.Workbook == nil {
@@ -764,9 +764,55 @@ func transformFormulaReferences(formula, formulaSheet, targetSheet string, colum
 			if columns {
 				coord = reference.columnNumber - 1
 			}
-			inDeletedRange := delta < 0 && coord >= threshold+delta && coord < threshold
 			previousEndpoint := referenceIndex > 1 && formula[references[referenceIndex-2].end:min(references[referenceIndex-2].end+1, len(formula))] == ":"
 			nextEndpoint := formula[reference.end:min(reference.end+1, len(formula))] == ":"
+			if delta < 0 && (previousEndpoint || nextEndpoint) {
+				endpointIndex := referenceIndex - 1
+				if previousEndpoint {
+					endpointIndex--
+				}
+				startReference, endReference := references[endpointIndex], references[endpointIndex+1]
+				startCoord, endCoord := startReference.row-1, endReference.row-1
+				if columns {
+					startCoord, endCoord = startReference.columnNumber-1, endReference.columnNumber-1
+				}
+				rangeStart, rangeEnd := min(startCoord, endCoord), max(startCoord, endCoord)
+				deletedStart, deletedEnd := threshold+delta, threshold-1
+				survivesBefore, survivesAfter := rangeStart < deletedStart, rangeEnd > deletedEnd
+				if !survivesBefore && !survivesAfter {
+					output.WriteString("#REF!")
+				} else {
+					newLow, newHigh := rangeStart, rangeEnd
+					switch {
+					case survivesBefore && survivesAfter:
+						newHigh += delta
+					case survivesBefore:
+						newHigh = deletedStart - 1
+					case survivesAfter:
+						newLow = deletedStart
+						newHigh += delta
+					}
+					newStart, newEnd := newLow, newHigh
+					if startCoord > endCoord {
+						newStart, newEnd = newHigh, newLow
+					}
+					formatEndpoint := func(ref formulaReference, value int) string {
+						if columns {
+							ref.columnNumber = value + 1
+						} else {
+							ref.row = value + 1
+						}
+						return formatFormulaReference(ref)
+					}
+					output.WriteString(formatEndpoint(startReference, newStart))
+					output.WriteByte(':')
+					output.WriteString(formatEndpoint(endReference, newEnd))
+				}
+				index = endReference.end
+				referenceIndex = endpointIndex + 2
+				continue
+			}
+			inDeletedRange := delta < 0 && coord >= threshold+delta && coord < threshold
 			if inDeletedRange && !previousEndpoint && !nextEndpoint {
 				output.WriteString("#REF!")
 			} else {
@@ -777,16 +823,7 @@ func transformFormulaReferences(formula, formulaSheet, targetSheet string, colum
 						reference.row += delta
 					}
 				}
-				output.WriteString(reference.prefix)
-				if reference.columnAbsolute {
-					output.WriteByte('$')
-				}
-				columnName, _ := excelize.ColumnNumberToName(reference.columnNumber)
-				output.WriteString(columnName)
-				if reference.rowAbsolute {
-					output.WriteByte('$')
-				}
-				output.WriteString(strconv.Itoa(reference.row))
+				output.WriteString(formatFormulaReference(reference))
 			}
 			index = reference.end
 			continue
@@ -794,6 +831,21 @@ func transformFormulaReferences(formula, formulaSheet, targetSheet string, colum
 		output.WriteByte(formula[index])
 		index++
 	}
+	return output.String()
+}
+
+func formatFormulaReference(reference formulaReference) string {
+	var output strings.Builder
+	output.WriteString(reference.prefix)
+	if reference.columnAbsolute {
+		output.WriteByte('$')
+	}
+	columnName, _ := excelize.ColumnNumberToName(reference.columnNumber)
+	output.WriteString(columnName)
+	if reference.rowAbsolute {
+		output.WriteByte('$')
+	}
+	output.WriteString(strconv.Itoa(reference.row))
 	return output.String()
 }
 
