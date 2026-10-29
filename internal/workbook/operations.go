@@ -716,10 +716,25 @@ func restoreSession(session *Session, snapshot sessionSnapshot) error {
 }
 
 func transformFormulaReferences(formula, formulaSheet, targetSheet string, columns bool, threshold, delta int) string {
+	references := make([]formulaReference, 0, 4)
+	starts := make([]int, 0, 4)
+	for index := 0; index < len(formula); {
+		if formula[index] == '"' {
+			index = skipFormulaString(formula, index)
+			continue
+		}
+		if reference, ok := parseCellReference(formula, index); ok {
+			references = append(references, reference)
+			starts = append(starts, index)
+			index = reference.end
+			continue
+		}
+		index++
+	}
+
 	var output strings.Builder
 	output.Grow(len(formula))
-	rangeSheet := ""
-	rangePending := false
+	referenceIndex := 0
 	for index := 0; index < len(formula); {
 		if formula[index] == '"' {
 			end := skipFormulaString(formula, index)
@@ -727,53 +742,56 @@ func transformFormulaReferences(formula, formulaSheet, targetSheet string, colum
 			index = end
 			continue
 		}
-		if reference, ok := parseCellReference(formula, index); ok {
+		if referenceIndex < len(references) && index == starts[referenceIndex] {
+			reference := references[referenceIndex]
+			refStart := starts[referenceIndex]
+			referenceIndex++
 			refSheet := formulaSheet
 			if reference.qualified {
 				refSheet = reference.sheet
-			} else if rangePending && rangeSheet != "" {
-				refSheet = rangeSheet
+			} else if referenceIndex >= 2 && formula[references[referenceIndex-2].end] == ':' {
+				refSheet = references[referenceIndex-2].sheet
+				if refSheet == "" {
+					refSheet = formulaSheet
+				}
 			}
-			referenceCoordinate := reference.row - 1
-			if columns {
-				referenceCoordinate = reference.columnNumber - 1
-			}
-			if delta < 0 && referenceCoordinate >= threshold+delta && referenceCoordinate < threshold {
-				output.WriteString("#REF!")
-				rangeSheet = refSheet
-				rangePending = false
+			if !strings.EqualFold(refSheet, targetSheet) {
+				output.WriteString(formula[refStart:reference.end])
 				index = reference.end
 				continue
 			}
-			if referenceCoordinate >= threshold {
-				if columns {
-					reference.columnNumber += delta
-				} else {
-					reference.row += delta
+			coord := reference.row - 1
+			if columns {
+				coord = reference.columnNumber - 1
+			}
+			inDeletedRange := delta < 0 && coord >= threshold+delta && coord < threshold
+			previousEndpoint := referenceIndex > 1 && formula[references[referenceIndex-2].end:min(references[referenceIndex-2].end+1, len(formula))] == ":"
+			nextEndpoint := formula[reference.end:min(reference.end+1, len(formula))] == ":"
+			if inDeletedRange && !previousEndpoint && !nextEndpoint {
+				output.WriteString("#REF!")
+			} else {
+				if coord >= threshold {
+					if columns {
+						reference.columnNumber += delta
+					} else {
+						reference.row += delta
+					}
 				}
+				output.WriteString(reference.prefix)
+				if reference.columnAbsolute {
+					output.WriteByte('$')
+				}
+				columnName, _ := excelize.ColumnNumberToName(reference.columnNumber)
+				output.WriteString(columnName)
+				if reference.rowAbsolute {
+					output.WriteByte('$')
+				}
+				output.WriteString(strconv.Itoa(reference.row))
 			}
-			output.WriteString(reference.prefix)
-			if reference.columnAbsolute {
-				output.WriteByte('$')
-			}
-			columnName, _ := excelize.ColumnNumberToName(reference.columnNumber)
-			output.WriteString(columnName)
-			if reference.rowAbsolute {
-				output.WriteByte('$')
-			}
-			output.WriteString(strconv.Itoa(reference.row))
-			rangeSheet = refSheet
-			rangePending = false
 			index = reference.end
 			continue
 		}
-		char := formula[index]
-		output.WriteByte(char)
-		if char == ':' {
-			rangePending = true
-		} else if rangePending && char != ' ' && char != '\t' {
-			rangePending = false
-		}
+		output.WriteByte(formula[index])
 		index++
 	}
 	return output.String()

@@ -294,6 +294,35 @@ func TestDeleteColumnsInvalidatesReferencesIntoDeletedColumnsUndoRedo(t *testing
 	}
 	assertOperationCell(t, session, formulaAddress, "=#REF!", "#REF!")
 }
+func TestDeleteRowsPreservesUnrelatedAndContractsRanges(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=Sheet1!A2+SUM(Sheet1!A1:A5)+SUM(Sheet1!B1:B5)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRows(session, "Sheet1", 0, 1); err != nil {
+		t.Fatalf("DeleteRows: %v", err)
+	}
+	assertOperationInput(t, session, formulaAddress, "=Sheet1!A1+SUM(Sheet1!A1:A4)+SUM(Sheet1!B1:B4)")
+}
+
+func TestDeleteColumnsContractsPartialRanges(t *testing.T) {
+	session := newOperationSession(t)
+	if err := AddSheet(session, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	formulaAddress := CellAddress{Sheet: "Other", Row: 0, Col: 0}
+	if err := SetCell(session, formulaAddress, "=SUM(Sheet1!A1:E1)+SUM(Sheet1!B1:E1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteColumns(session, "Sheet1", 0, 1); err != nil {
+		t.Fatalf("DeleteColumns: %v", err)
+	}
+	assertOperationInput(t, session, formulaAddress, "=SUM(Sheet1!A1:D1)+SUM(Sheet1!A1:D1)")
+}
 
 func assertOperationCell(t *testing.T, session *Session, address CellAddress, input, result string) {
 	t.Helper()
@@ -306,6 +335,17 @@ func assertOperationCell(t *testing.T, session *Session, address CellAddress, in
 		t.Fatalf("cell %s!%d,%d = (%q, %q), want (%q, %q)", address.Sheet, address.Row, address.Col, cell.Input, cell.Result, input, result)
 	}
 }
+func assertOperationInput(t *testing.T, session *Session, address CellAddress, input string) {
+	t.Helper()
+	index, exists := sheetIndex(session.Workbook, address.Sheet)
+	if !exists {
+		t.Fatalf("sheet %q does not exist", address.Sheet)
+	}
+	if got := session.Workbook.Sheets[index].Cells[Coord{Row: address.Row, Col: address.Col}].Input; got != input {
+		t.Fatalf("cell %s!%d,%d input = %q, want %q", address.Sheet, address.Row, address.Col, got, input)
+	}
+}
+
 
 func TestDeleteColumnsShiftsCellsWidthsAndFormulaReferencesUndoRedo(t *testing.T) {
 	session := newOperationSession(t)
