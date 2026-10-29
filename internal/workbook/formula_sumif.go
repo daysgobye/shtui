@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // matchesSUMIFCriteria reports whether a cell value satisfies an Excel-style SUMIF criterion.
@@ -44,7 +45,7 @@ func matchesSUMIFCriteria(value, criteria string) (bool, error) {
 				return left <= right, nil
 			}
 		}
-		leftText, rightText := strings.ToLower(value), strings.ToLower(operand)
+		leftText, rightText := simpleFoldKey(value), simpleFoldKey(operand)
 		switch operator {
 		case ">":
 			return leftText > rightText, nil
@@ -69,6 +70,20 @@ func matchesSUMIFCriteria(value, criteria string) (bool, error) {
 		return !matched, nil
 	}
 	return matched, nil
+}
+
+func simpleFoldKey(value string) string {
+	var key strings.Builder
+	for _, r := range value {
+		minimum := r
+		for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+			if folded < minimum {
+				minimum = folded
+			}
+		}
+		key.WriteRune(minimum)
+	}
+	return key.String()
 }
 
 func sumifWildcardPattern(operand string) (string, error) {

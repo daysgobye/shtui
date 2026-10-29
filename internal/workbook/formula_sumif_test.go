@@ -49,6 +49,9 @@ func TestSUMIFCriteriaTextComparisons(t *testing.T) {
 		{"pear", "<=Pear", true},
 		{"apple", "<>banana", true},
 		{"pear", ">4", true},
+		{"σ", ">=ς", true},
+		{"σ", "<=ς", true},
+		{"ς", "<=σ", true},
 	} {
 		got, err := matchesSUMIFCriteria(test.value, test.criteria)
 		if err != nil || got != test.want {
