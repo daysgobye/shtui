@@ -1,14 +1,16 @@
 package app
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
-	"shtui/internal/ui"
-	"shtui/internal/workbook"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/xuri/excelize/v2"
+	"shtui/internal/ui"
+	"shtui/internal/workbook"
 )
 
 func TestQuitConfirmationKeyboardAndDoubleCtrlC(t *testing.T) {
@@ -199,6 +201,78 @@ func TestPathLaunchOpensSelectedFormat(t *testing.T) {
 		t.Fatal("loaded CSV is not visible in the TUI")
 	}
 }
+func TestMouseResizedOpenedXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resized.xlsx")
+	created, err := workbook.NewWorkbook(workbook.XLSX)
+	if err != nil {
+		t.Fatalf("NewWorkbook: %v", err)
+	}
+	if err := workbook.SetCell(created, workbook.CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}, "data"); err != nil {
+		t.Fatalf("SetCell: %v", err)
+	}
+	if err := workbook.SetColumnWidth(created, "Sheet1", 0, 10); err != nil {
+		t.Fatalf("SetColumnWidth: %v", err)
+	}
+	if err := workbook.SaveFile(created, path); err != nil {
+		t.Fatalf("save initial workbook: %v", err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatalf("close initial workbook: %v", err)
+	}
+
+	controller := NewController(path)
+	controller.Update(controller.Init()())
+	if controller.session == nil || controller.session.Format != workbook.XLSX {
+		t.Fatalf("opened session = %#v, want XLSX", controller.session)
+	}
+	controller.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	boundaryX := controller.view.Grid.RowHeaderWidth + 10
+	mouse := func(x int, action tea.MouseAction) {
+		t.Helper()
+		controller.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: controller.view.Grid.OriginY, Action: action, Button: tea.MouseButtonLeft}))
+	}
+	mouse(boundaryX, tea.MouseActionPress)
+	mouse(boundaryX+5, tea.MouseActionMotion)
+	mouse(boundaryX+5, tea.MouseActionRelease)
+
+	if got := controller.session.Workbook.Sheets[0].ColumnWidths[0]; got != 15 {
+		t.Fatalf("resized model column A width = %v, want 15", got)
+	}
+	if err := workbook.SaveFile(controller.session, path); err != nil {
+		t.Fatalf("save resized workbook: %v", err)
+	}
+	if err := controller.session.Close(); err != nil {
+		t.Fatalf("close resized workbook: %v", err)
+	}
+
+	reopened := NewController(path)
+	reopened.Update(reopened.Init()())
+	if reopened.session == nil || reopened.session.Format != workbook.XLSX {
+		t.Fatalf("reopened session = %#v, want XLSX", reopened.session)
+	}
+	t.Cleanup(func() { _ = reopened.session.Close() })
+	if got := reopened.session.Workbook.Sheets[0].ColumnWidths[0]; got != 15 {
+		t.Fatalf("reopened model column A width = %v, want 15", got)
+	}
+	xlsx, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatalf("open saved XLSX with Excelize: %v", err)
+	}
+	defer xlsx.Close()
+	if got, err := xlsx.GetColWidth("Sheet1", "A"); err != nil {
+		t.Fatalf("GetColWidth: %v", err)
+	} else if got != 15 {
+		t.Fatalf("persisted Excelize column A width = %v, want 15", got)
+	}
+	reopened.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	gridView := reopened.view.Grid.View(&reopened.session.Workbook.Sheets[0], 8)
+	header := strings.Split(ansi.Strip(strings.Split(gridView, "\n")[0]), "│")
+	renderedColumnWidth := ansi.StringWidth(header[1]) + 1
+	if renderedColumnWidth != 15 {
+		t.Fatalf("reopened rendered column A width = %d, want 15: %q", renderedColumnWidth, header[1])
+	}
+}
+
 
 func TestPathLaunchOpensXLSXFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.xlsx")
