@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/csv"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -14,25 +16,28 @@ type Clipboard interface {
 
 type systemClipboard struct{}
 
-func (systemClipboard) Read() (string, error) { return clipboard.ReadAll() }
+func (systemClipboard) Read() (string, error)   { return clipboard.ReadAll() }
 func (systemClipboard) Write(text string) error { return clipboard.WriteAll(text) }
 
 func matrixTSV(matrix [][]string) string {
-	rows := make([]string, len(matrix))
-	for row := range matrix {
-		rows[row] = strings.Join(matrix[row], "\t")
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+	writer.Comma = '\t'
+	for _, row := range matrix {
+		_ = writer.Write(row)
 	}
-	return strings.Join(rows, "\n")
+	writer.Flush()
+	return strings.TrimSuffix(buffer.String(), "\n")
 }
 
-func parseTSV(text string) [][]string {
-	text = strings.TrimRight(text, "\r\n")
-	rows := strings.Split(text, "\n")
-	matrix := make([][]string, len(rows))
-	for row, line := range rows {
-		matrix[row] = strings.Split(strings.TrimSuffix(line, "\r"), "\t")
+func parseTSV(text string) ([][]string, error) {
+	if text == "" {
+		return [][]string{{""}}, nil
 	}
-	return matrix
+	reader := csv.NewReader(strings.NewReader(text))
+	reader.Comma = '\t'
+	reader.FieldsPerRecord = -1
+	return reader.ReadAll()
 }
 
 func (model *AppModel) clipboardForUse() Clipboard {
@@ -62,11 +67,20 @@ func (model *AppModel) copySelection(cut bool) {
 }
 
 func (model *AppModel) pasteSelection() {
+	sheet := model.activeSheet()
+	if sheet == nil {
+		return
+	}
 	text, err := model.clipboardForUse().Read()
 	if err == nil {
-		err = workbook.PasteRange(model.session, workbook.CellAddress{
-			Sheet: model.activeSheet().Name, Row: model.Grid.Selected.Row, Col: model.Grid.Selected.Col,
-		}, parseTSV(text))
+		matrix, parseErr := parseTSV(text)
+		if parseErr != nil {
+			err = parseErr
+		} else {
+			err = workbook.PasteRange(model.session, workbook.CellAddress{
+				Sheet: sheet.Name, Row: model.Grid.Selected.Row, Col: model.Grid.Selected.Col,
+			}, matrix)
+		}
 	}
 	model.setStatus(err)
 	if err == nil {
