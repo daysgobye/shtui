@@ -22,33 +22,36 @@ type loadCompleteMsg struct {
 }
 
 type saveCompleteMsg struct {
-	path string
-	err  error
+	path       string
+	backupPath string
+	err        error
 }
 
 type Controller struct {
-	initialPath     string
-	path            string
-	session         *workbook.Session
-	view            ui.AppModel
-	loading         bool
-	loadingPath     string
-	saving          bool
-	picker          filepicker.Model
-	pickerOpen      bool
-	pickerMode      string
-	pickerFocused   bool
-	saveName        textinput.Model
-	keys            ui.KeyMap
-	csvSaveDialog   csvSaveDialog
-	quitDialog      quitDialog
-	quitConfirmed   bool
-	pendingSavePath string
-	status          string
-	lastAction      string
-	lastActionPath  string
-	width           int
-	height          int
+	initialPath        string
+	path               string
+	session            *workbook.Session
+	view               ui.AppModel
+	loading            bool
+	loadingPath        string
+	saving             bool
+	picker             filepicker.Model
+	pickerOpen         bool
+	pickerMode         string
+	pickerFocused      bool
+	saveName           textinput.Model
+	keys               ui.KeyMap
+	csvSaveDialog      csvSaveDialog
+	quitDialog         quitDialog
+	saveRecoveryDialog saveRecoveryDialog
+	forceSavePath      string
+	quitConfirmed      bool
+	pendingSavePath    string
+	status             string
+	lastAction         string
+	lastActionPath     string
+	width              int
+	height             int
 }
 
 func NewController(path string) *Controller {
@@ -111,6 +114,9 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return controller, nil
 	}
 	if keyMessage, ok := message.(tea.KeyMsg); ok && keyMessage.Type == tea.KeyCtrlC {
+		if controller.saveRecoveryDialog.open {
+			return controller, controller.handleSaveRecovery(saveRecoveryCancel)
+		}
 		if controller.quitDialog.open {
 			controller.quitDialog.open = false
 			controller.quitConfirmed = true
@@ -137,6 +143,16 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return controller, controller.handleQuitAction(controller.quitDialog.handleKey(message))
 		case tea.MouseMsg:
 			return controller, controller.handleQuitAction(controller.quitDialog.handleMouse(message, controller.width, controller.height, controller.session != nil && controller.session.Workbook != nil && controller.session.Workbook.Dirty))
+		}
+	}
+	if controller.saveRecoveryDialog.open {
+		switch message := message.(type) {
+		case tea.KeyMsg:
+			return controller, controller.handleSaveRecovery(controller.saveRecoveryDialog.handleKey(message))
+		case tea.MouseMsg:
+			return controller, controller.handleSaveRecovery(controller.saveRecoveryDialog.handleMouse(message, controller.width, controller.height))
+		default:
+			return controller, nil
 		}
 	}
 	if controller.pickerOpen {
@@ -174,11 +190,23 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		controller.pendingSavePath = ""
 		if message.err != nil {
 			controller.status = fmt.Sprintf("Save %q failed: %v", message.path, message.err)
+			if message.backupPath != "" {
+				controller.status += fmt.Sprintf(" (original backed up at %s)", message.backupPath)
+			}
+			if strings.Contains(message.err.Error(), "refusing save") && strings.Contains(message.err.Error(), "preserve workbook content") {
+				controller.forceSavePath = message.path
+				controller.saveRecoveryDialog.show(message.err)
+				controller.status = ""
+			}
 		} else {
 			controller.path = message.path
 			controller.status = fmt.Sprintf("Saved %s", message.path)
+			if message.backupPath != "" {
+				controller.status += fmt.Sprintf(" (backup: %s)", message.backupPath)
+			}
 			controller.lastAction = "Saved workbook"
 			controller.lastActionPath = message.path
+			controller.forceSavePath = ""
 		}
 		return controller, nil
 	case tea.KeyMsg:
@@ -211,6 +239,9 @@ func (controller *Controller) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		action := controller.view.TakeCommand()
 		return controller, controller.handleAction(action, command)
 	case tea.MouseMsg:
+		if controller.saveRecoveryDialog.open {
+			return controller, controller.handleSaveRecovery(controller.saveRecoveryDialog.handleMouse(message, controller.width, controller.height))
+		}
 		if controller.csvSaveDialog.open {
 			return controller, controller.handleCSVSaveChoice(controller.csvSaveDialog.handleMouse(message, controller.width, controller.height))
 		}
@@ -234,6 +265,18 @@ func (controller *Controller) handleQuitAction(action quitAction) tea.Cmd {
 	}
 	controller.quitConfirmed = true
 	return tea.Quit
+}
+func (controller *Controller) handleSaveRecovery(action saveRecoveryAction) tea.Cmd {
+	switch action {
+	case saveRecoveryForce:
+		path := controller.forceSavePath
+		controller.saveRecoveryDialog.open = false
+		return controller.startForceSave(path)
+	case saveRecoveryCancel:
+		controller.forceSavePath = ""
+		controller.status = "Save canceled; original workbook unchanged"
+	}
+	return nil
 }
 
 func (controller *Controller) View() string {
@@ -274,6 +317,9 @@ func (controller *Controller) View() string {
 		dirty := controller.session != nil && controller.session.Workbook != nil && controller.session.Workbook.Dirty
 		content = ui.ComposeOverlay(content, controller.quitDialog.View(controller.width, controller.height, dirty), controller.width, controller.height)
 	}
+	if controller.saveRecoveryDialog.open {
+		content = ui.ComposeOverlay(content, controller.saveRecoveryDialog.View(controller.width, controller.height), controller.width, controller.height)
+	}
 	return content
 }
 
@@ -289,6 +335,14 @@ func (controller *Controller) saveCmd(path string) tea.Cmd {
 	return func() tea.Msg {
 		err := workbook.SaveFile(session, path)
 		return saveCompleteMsg{path: path, err: err}
+	}
+}
+
+func (controller *Controller) forceSaveCmd(path string) tea.Cmd {
+	session := controller.session
+	return func() tea.Msg {
+		backupPath, err := workbook.ForceSaveFile(session, path)
+		return saveCompleteMsg{path: path, backupPath: backupPath, err: err}
 	}
 }
 
@@ -476,6 +530,13 @@ func (controller *Controller) startSave(path string) tea.Cmd {
 	controller.pendingSavePath = path
 	controller.status = ""
 	return controller.saveCmd(path)
+}
+
+func (controller *Controller) startForceSave(path string) tea.Cmd {
+	controller.saving = true
+	controller.pendingSavePath = path
+	controller.status = ""
+	return controller.forceSaveCmd(path)
 }
 
 func (controller *Controller) openCSVSaveDialog(path string) {

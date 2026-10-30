@@ -9,7 +9,7 @@ go build -o shtui ./cmd/shtui
 ./shtui [workbook.csv|workbook.xlsx]
 ```
 
-With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook** from the home screen or command palette. Loading and saving run asynchronously. A failed open keeps the current workbook; a failed save keeps it dirty and reports the cause. **Save as** opens a floating picker and proposes the current file's basename with the format's extension. CSV-to-XLSX conversion is available from the save-choice dialog when CSV cannot preserve workbook features.
+With no path, choose **Open file**, **New CSV workbook**, or **New XLSX workbook** from the home screen or command palette. Loading and saving run asynchronously. A failed open keeps the current workbook; a failed save keeps it dirty and reports the cause. If XLSX preservation checks reject a save, Shtui offers a force-save choice; forcing creates a sibling `.bak` backup before replacing the target and may lose unsupported workbook features. **Save as** opens a floating picker and proposes the current file's basename with the format's extension. CSV-to-XLSX conversion is available from the save-choice dialog when CSV cannot preserve workbook features.
 
 ## Linux file-browser integration
 

@@ -337,6 +337,18 @@ func TestColumnBoundaryDragResizesOnlyTargetColumn(t *testing.T) {
 	}
 }
 
+func TestColumnBoundaryClickWithoutDragDoesNotResize(t *testing.T) {
+	grid := NewGridViewport()
+	grid.SetBounds(0, 0, 60, 12)
+	sheet := &workbook.Sheet{Rows: 5, Cols: 3}
+	boundary := grid.RowHeaderWidth + defaultColumnWidth
+	grid.HandleMouse(tea.MouseMsg(tea.MouseEvent{X: boundary, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}), sheet)
+	col, width, resized := grid.HandleMouse(tea.MouseMsg(tea.MouseEvent{X: boundary, Y: 0, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}), sheet)
+	if resized {
+		t.Fatalf("click without drag reported resize to column %d width %d", col, width)
+	}
+}
+
 func TestTerminalResizePreservesSelectedCell(t *testing.T) {
 	model := NewModel(&workbook.Session{Workbook: &workbook.Workbook{Sheets: []workbook.Sheet{{Name: "Sheet1", Rows: 20, Cols: 10, Cells: map[workbook.Coord]workbook.Cell{}}}}})
 	model.Grid.Selected = workbook.Coord{Row: 8, Col: 4}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,6 @@ func TestQuitDialogUsesUppercaseBrandText(t *testing.T) {
 		t.Fatalf("quit dialog rendered the full grid wordmark: %q", plain)
 	}
 }
-
 
 func TestQuitConfirmationMouseActions(t *testing.T) {
 	yes := NewController("")
@@ -201,23 +201,15 @@ func TestPathLaunchOpensSelectedFormat(t *testing.T) {
 		t.Fatal("loaded CSV is not visible in the TUI")
 	}
 }
-func TestMouseResizedOpenedXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "resized.xlsx")
-	created, err := workbook.NewWorkbook(workbook.XLSX)
+func TestMouseResizedExistingXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
+	fixture := filepath.Join("..", "workbook", "testdata", "preservation", "chart.xlsx")
+	fixtureBytes, err := os.ReadFile(fixture)
 	if err != nil {
-		t.Fatalf("NewWorkbook: %v", err)
+		t.Fatalf("read XLSX preservation fixture: %v", err)
 	}
-	if err := workbook.SetCell(created, workbook.CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}, "data"); err != nil {
-		t.Fatalf("SetCell: %v", err)
-	}
-	if err := workbook.SetColumnWidth(created, "Sheet1", 0, 10); err != nil {
-		t.Fatalf("SetColumnWidth: %v", err)
-	}
-	if err := workbook.SaveFile(created, path); err != nil {
-		t.Fatalf("save initial workbook: %v", err)
-	}
-	if err := created.Close(); err != nil {
-		t.Fatalf("close initial workbook: %v", err)
+	path := filepath.Join(t.TempDir(), "chart.xlsx")
+	if err := os.WriteFile(path, fixtureBytes, 0o600); err != nil {
+		t.Fatalf("copy XLSX preservation fixture: %v", err)
 	}
 
 	controller := NewController(path)
@@ -225,8 +217,14 @@ func TestMouseResizedOpenedXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
 	if controller.session == nil || controller.session.Format != workbook.XLSX {
 		t.Fatalf("opened session = %#v, want XLSX", controller.session)
 	}
+	t.Cleanup(func() {
+		if controller.session != nil {
+			_ = controller.session.Close()
+		}
+	})
+	initialWidth := controller.session.Workbook.Sheets[0].ColumnWidths[0]
 	controller.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	boundaryX := controller.view.Grid.RowHeaderWidth + 10
+	boundaryX := controller.view.Grid.RowHeaderWidth + int(initialWidth)
 	mouse := func(x int, action tea.MouseAction) {
 		t.Helper()
 		controller.Update(tea.MouseMsg(tea.MouseEvent{X: x, Y: controller.view.Grid.OriginY, Action: action, Button: tea.MouseButtonLeft}))
@@ -235,15 +233,17 @@ func TestMouseResizedOpenedXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
 	mouse(boundaryX+5, tea.MouseActionMotion)
 	mouse(boundaryX+5, tea.MouseActionRelease)
 
-	if got := controller.session.Workbook.Sheets[0].ColumnWidths[0]; got != 15 {
-		t.Fatalf("resized model column A width = %v, want 15", got)
+	wantWidth := initialWidth + 5
+	if got := controller.session.Workbook.Sheets[0].ColumnWidths[0]; got != wantWidth {
+		t.Fatalf("resized model column A width = %v, want %v", got, wantWidth)
 	}
 	if err := workbook.SaveFile(controller.session, path); err != nil {
-		t.Fatalf("save resized workbook: %v", err)
+		t.Fatalf("save resized preservation fixture: %v", err)
 	}
 	if err := controller.session.Close(); err != nil {
 		t.Fatalf("close resized workbook: %v", err)
 	}
+	controller.session = nil
 
 	reopened := NewController(path)
 	reopened.Update(reopened.Init()())
@@ -251,8 +251,8 @@ func TestMouseResizedOpenedXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
 		t.Fatalf("reopened session = %#v, want XLSX", reopened.session)
 	}
 	t.Cleanup(func() { _ = reopened.session.Close() })
-	if got := reopened.session.Workbook.Sheets[0].ColumnWidths[0]; got != 15 {
-		t.Fatalf("reopened model column A width = %v, want 15", got)
+	if got := reopened.session.Workbook.Sheets[0].ColumnWidths[0]; got != wantWidth {
+		t.Fatalf("reopened model column A width = %v, want %v", got, wantWidth)
 	}
 	xlsx, err := excelize.OpenFile(path)
 	if err != nil {
@@ -261,18 +261,17 @@ func TestMouseResizedOpenedXLSXColumnPersistsAfterSaveAndReopen(t *testing.T) {
 	defer xlsx.Close()
 	if got, err := xlsx.GetColWidth("Sheet1", "A"); err != nil {
 		t.Fatalf("GetColWidth: %v", err)
-	} else if got != 15 {
-		t.Fatalf("persisted Excelize column A width = %v, want 15", got)
+	} else if got != wantWidth {
+		t.Fatalf("persisted Excelize column A width = %v, want %v", got, wantWidth)
 	}
 	reopened.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	gridView := reopened.view.Grid.View(&reopened.session.Workbook.Sheets[0], 8)
 	header := strings.Split(ansi.Strip(strings.Split(gridView, "\n")[0]), "│")
 	renderedColumnWidth := ansi.StringWidth(header[1]) + 1
-	if renderedColumnWidth != 15 {
-		t.Fatalf("reopened rendered column A width = %d, want 15: %q", renderedColumnWidth, header[1])
+	if renderedColumnWidth != int(wantWidth) {
+		t.Fatalf("reopened rendered column A width = %d, want %v: %q", renderedColumnWidth, wantWidth, header[1])
 	}
 }
-
 
 func TestPathLaunchOpensXLSXFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.xlsx")
@@ -900,5 +899,53 @@ func TestRunPrintsSummaryOnlyAfterConfirmedQuit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+func TestPreservationSaveFailureOffersBackedUpForceSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.xlsx")
+	session, err := workbook.NewWorkbook(workbook.XLSX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SaveFile(session, path); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+	if err := workbook.SetCell(session, workbook.CellAddress{Sheet: "Sheet1"}, "edited"); err != nil {
+		t.Fatalf("edit workbook: %v", err)
+	}
+	session.Workbook.Dirty = true
+	controller := NewController("")
+	controller.session = session
+	controller.path = path
+	controller.view = ui.NewModel(session)
+	controller.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	t.Cleanup(func() { _ = session.Close() })
+
+	controller.Update(saveCompleteMsg{
+		path: path,
+		err:  errors.New(`refusing save of "book.xlsx" to preserve workbook content: relationship part "xl/_rels/workbook.xml.rels" changed`),
+	})
+	view := ansi.Strip(controller.saveRecoveryDialog.View(controller.width, controller.height))
+	for _, want := range []string{"Force save (Y)", "backup", "charts", "Cancel"} {
+		if !strings.Contains(strings.ToLower(view), strings.ToLower(want)) {
+			t.Fatalf("save recovery prompt lacks %q: %q", want, view)
+		}
+	}
+	_, command := controller.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if command == nil {
+		t.Fatal("Y did not start force save")
+	}
+	message, ok := command().(saveCompleteMsg)
+	if !ok || message.err != nil {
+		t.Fatalf("force save result = %#v, want successful saveCompleteMsg", message)
+	}
+	if message.backupPath == "" {
+		t.Fatal("force save did not report the backup path")
+	}
+	if _, err := os.Stat(message.backupPath); err != nil {
+		t.Fatalf("force-save backup does not exist: %v", err)
+	}
+	if session.Workbook.Dirty {
+		t.Fatal("successful force save left workbook dirty")
 	}
 }

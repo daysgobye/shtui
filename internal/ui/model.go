@@ -511,7 +511,11 @@ func (model *AppModel) handleMouse(message tea.MouseMsg) {
 	}
 	col, width, resized := model.Grid.HandleMouse(message, model.activeSheet())
 	if resized {
-		if err := workbook.SetColumnWidth(model.session, model.activeSheet().Name, col, float64(width)); err != nil {
+		targetWidth := float64(width)
+		if previous, exists := model.activeSheet().ColumnWidths[col]; exists {
+			targetWidth += previous - float64(int(previous))
+		}
+		if err := workbook.SetColumnWidth(model.session, model.activeSheet().Name, col, targetWidth); err != nil {
 			model.status = err.Error()
 		} else {
 			model.showCSVFeatureNotice()

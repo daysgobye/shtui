@@ -14,7 +14,11 @@ import (
 )
 
 func workbookFromExcelize(file *excelize.File, path string, format Format) (*Workbook, error) {
-	styledCellRefs, err := styledCellReferences(file)
+	worksheetParts, err := worksheetPackageParts(file)
+	if err != nil {
+		return nil, fmt.Errorf("read worksheet parts: %w", err)
+	}
+	styledCellRefs, err := styledCellReferences(worksheetParts)
 	if err != nil {
 		return nil, fmt.Errorf("read styled cell references: %w", err)
 	}
@@ -108,6 +112,23 @@ func workbookFromExcelize(file *excelize.File, path string, format Format) (*Wor
 			}
 			sheet.ColumnWidths[col] = width
 		}
+		widthRanges, err := worksheetColumnWidthRanges(worksheetParts[sheetName])
+		if err != nil {
+			return nil, fmt.Errorf("read column width ranges in sheet %q: %w", sheetName, err)
+		}
+		for _, widthRange := range widthRanges {
+			for col := max(widthRange.min-1, sheet.Cols); col < widthRange.max; col++ {
+				columnName, err := excelize.ColumnNumberToName(col + 1)
+				if err != nil {
+					return nil, fmt.Errorf("address column %d in sheet %q: %w", col, sheetName, err)
+				}
+				width, err := file.GetColWidth(sheetName, columnName)
+				if err != nil {
+					return nil, fmt.Errorf("read width %s!%s: %w", sheetName, columnName, err)
+				}
+				sheet.ColumnWidths[col] = width
+			}
+		}
 		merges, err := file.GetMergeCells(sheetName, true)
 		if err != nil {
 			return nil, fmt.Errorf("read merged cells in sheet %q: %w", sheetName, err)
@@ -138,7 +159,7 @@ func workbookFromExcelize(file *excelize.File, path string, format Format) (*Wor
 	return workbook, nil
 }
 
-func styledCellReferences(file *excelize.File) (map[string][]string, error) {
+func worksheetPackageParts(file *excelize.File) (map[string][]byte, error) {
 	workbookData, ok := excelizePackagePart(file, "xl/workbook.xml")
 	if !ok {
 		return nil, nil
@@ -178,7 +199,7 @@ func styledCellReferences(file *excelize.File) (map[string][]string, error) {
 			kind   string
 		}{target: relationship.Target, kind: relationship.Type}
 	}
-	result := make(map[string][]string)
+	result := make(map[string][]byte)
 	for _, sheet := range workbookXML.Sheets.Items {
 		relationship, exists := relationships[sheet.Rel]
 		if !exists || !strings.HasSuffix(relationship.kind, "/worksheet") {
@@ -193,16 +214,54 @@ func styledCellReferences(file *excelize.File) (map[string][]string, error) {
 			continue
 		}
 		worksheetData, ok := excelizePackagePart(file, target)
-		if !ok {
-			continue
+		if ok {
+			result[sheet.Name] = worksheetData
 		}
-		references, err := styledCellReferencesFromWorksheet(worksheetData)
-		if err != nil {
-			return nil, fmt.Errorf("decode worksheet %q: %w", sheet.Name, err)
-		}
-		result[sheet.Name] = append(result[sheet.Name], references...)
 	}
 	return result, nil
+}
+
+func styledCellReferences(worksheetParts map[string][]byte) (map[string][]string, error) {
+	result := make(map[string][]string, len(worksheetParts))
+	for sheetName, worksheetData := range worksheetParts {
+		references, err := styledCellReferencesFromWorksheet(worksheetData)
+		if err != nil {
+			return nil, fmt.Errorf("decode worksheet %q: %w", sheetName, err)
+		}
+		result[sheetName] = references
+	}
+	return result, nil
+}
+
+type columnRange struct {
+	min int
+	max int
+}
+
+func worksheetColumnWidthRanges(data []byte) ([]columnRange, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var worksheetXML struct {
+		Cols struct {
+			Items []struct {
+				Min   int     `xml:"min,attr"`
+				Max   int     `xml:"max,attr"`
+				Width float64 `xml:"width,attr"`
+			} `xml:"col"`
+		} `xml:"cols"`
+	}
+	if err := xml.Unmarshal(data, &worksheetXML); err != nil {
+		return nil, err
+	}
+	ranges := make([]columnRange, 0, len(worksheetXML.Cols.Items))
+	for _, column := range worksheetXML.Cols.Items {
+		if column.Min < 1 || column.Max < column.Min || column.Width <= 0 {
+			continue
+		}
+		ranges = append(ranges, columnRange{min: column.Min, max: column.Max})
+	}
+	return ranges, nil
 }
 
 func styledCellReferencesFromWorksheet(data []byte) ([]string, error) {
@@ -324,53 +383,77 @@ func cellRangeFromExcelize(reference string) (CellRange, error) {
 
 // SaveFile writes through a sibling temporary file and refuses package changes outside the safe allowlist.
 func SaveFile(session *Session, path string) error {
+	_, err := saveFile(session, path, false)
+	return err
+}
+
+// ForceSaveFile saves despite package-preservation audit failures after backing up an existing target.
+func ForceSaveFile(session *Session, path string) (string, error) {
+	return saveFile(session, path, true)
+}
+
+func saveFile(session *Session, path string, force bool) (string, error) {
 	if session == nil || session.Workbook == nil {
-		return fmt.Errorf("save workbook: session is nil")
+		return "", fmt.Errorf("save workbook: session is nil")
 	}
 	if path == "" {
 		path = session.Path
 	}
 	format, err := formatForPath(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	conversion := session.Format == CSV && format == XLSX
 	if format != session.Format && !conversion {
-		return fmt.Errorf("save %q as %s would change workbook format from %s", path, format, session.Format)
+		return "", fmt.Errorf("save %q as %s would change workbook format from %s", path, format, session.Format)
 	}
 	if format == CSV {
-		return saveCSV(session, path)
+		return "", saveCSV(session, path)
 	}
 	if conversion {
 		if err := ensureCalculationFile(session); err != nil {
-			return fmt.Errorf("prepare XLSX conversion for %q: %w", path, err)
+			return "", fmt.Errorf("prepare XLSX conversion for %q: %w", path, err)
 		}
 	} else if session.file == nil {
-		return fmt.Errorf("save %q: XLSX session has no open workbook", path)
+		return "", fmt.Errorf("save %q: XLSX session has no open workbook", path)
+	}
+
+	backupPath := ""
+	if force {
+		backupPath, err = backupExistingFile(path)
+		if err != nil {
+			return "", fmt.Errorf("create backup before force save of %q: %w", path, err)
+		}
+		if backupPath == "" && session.Path != "" && filepath.Clean(session.Path) != filepath.Clean(path) {
+			backupPath, err = backupExistingFile(session.Path)
+			if err != nil {
+				return "", fmt.Errorf("create backup before force save of %q: %w", path, err)
+			}
+		}
 	}
 
 	tempPath, err := createSiblingTemp(path)
 	if err != nil {
-		return fmt.Errorf("prepare save for %q: %w", path, err)
+		return backupPath, fmt.Errorf("prepare save for %q: %w", path, err)
 	}
 	defer os.Remove(tempPath)
 	if err := session.file.SaveAs(tempPath); err != nil {
-		return fmt.Errorf("save temporary workbook for %q: %w", path, err)
+		return backupPath, fmt.Errorf("save temporary workbook for %q: %w", path, err)
 	}
-	if !conversion && session.Path != "" && len(session.OriginalParts) > 0 {
+	if !force && !conversion && session.Path != "" && len(session.OriginalParts) > 0 {
 		if err := AuditPackage(session.Path, tempPath, safeWorkbookChanges(session.OriginalParts)); err != nil {
-			return fmt.Errorf("refusing save of %q to preserve workbook content: %w", path, err)
+			return "", fmt.Errorf("refusing save of %q to preserve workbook content: %w", path, err)
 		}
 	}
 	parts, err := SnapshotParts(tempPath)
 	if err != nil {
-		return fmt.Errorf("snapshot temporary workbook for %q: %w", path, err)
+		return backupPath, fmt.Errorf("snapshot temporary workbook for %q: %w", path, err)
 	}
 	if err := preserveMode(tempPath, path); err != nil {
-		return fmt.Errorf("prepare replacement for %q: %w", path, err)
+		return backupPath, fmt.Errorf("prepare replacement for %q: %w", path, err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("replace workbook %q: %w", path, err)
+		return backupPath, fmt.Errorf("replace workbook %q: %w", path, err)
 	}
 	session.Format = format
 	session.Workbook.Format = format
@@ -378,7 +461,50 @@ func SaveFile(session *Session, path string) error {
 	session.Workbook.Path = path
 	session.OriginalParts = parts
 	session.Workbook.Dirty = false
-	return nil
+	return backupPath, nil
+}
+
+func backupExistingFile(path string) (string, error) {
+	source, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	for suffix := 0; ; suffix++ {
+		backupPath := path + ".bak"
+		if suffix > 0 {
+			backupPath = fmt.Sprintf("%s.bak.%d", path, suffix)
+		}
+		backup, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, copyErr := io.Copy(backup, source)
+		syncErr := backup.Sync()
+		closeErr := backup.Close()
+		if copyErr != nil || syncErr != nil || closeErr != nil {
+			_ = os.Remove(backupPath)
+			if copyErr != nil {
+				return "", copyErr
+			}
+			if syncErr != nil {
+				return "", syncErr
+			}
+			return "", closeErr
+		}
+		return backupPath, nil
+	}
 }
 
 func saveCSV(session *Session, path string) error {

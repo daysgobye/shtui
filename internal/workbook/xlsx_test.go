@@ -328,3 +328,103 @@ func newCSVSessionWithSupportedFeatures(t *testing.T) *Session {
 	}
 	return session
 }
+func TestForceSaveFileBacksUpOriginalBeforeReplacement(t *testing.T) {
+	path := copyFixture(t, "chart.xlsx")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	existingBackup := path + ".bak"
+	if err := os.WriteFile(existingBackup, []byte("earlier backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCell(session, CellAddress{Sheet: "Sheet1", Row: 0, Col: 0}, "forced edit"); err != nil {
+		t.Fatalf("SetCell: %v", err)
+	}
+
+	backupPath, err := ForceSaveFile(session, path)
+	if err != nil {
+		t.Fatalf("ForceSaveFile: %v", err)
+	}
+	if backupPath != path+".bak.1" {
+		t.Fatalf("backup path = %q, want a new backup beside the existing one", backupPath)
+	}
+	prior, err := os.ReadFile(existingBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(prior) != "earlier backup" {
+		t.Fatal("force save overwrote the earlier backup")
+	}
+	backup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("read backup %q: %v", backupPath, err)
+	}
+	if !bytes.Equal(backup, original) {
+		t.Fatal("backup does not exactly preserve the original workbook")
+	}
+	reopened, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("reopen forced save: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	got, err := reopened.file.GetCellValue("Sheet1", "A1")
+	if err != nil {
+		t.Fatalf("GetCellValue: %v", err)
+	}
+	if got != "forced edit" {
+		t.Fatalf("saved A1 = %q, want forced edit", got)
+	}
+}
+
+func TestForceSaveAsBacksUpOriginalWhenTargetIsNew(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "source.xlsx")
+	session, err := NewWorkbook(XLSX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	if err := SaveFile(session, sourcePath); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+	original, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCell(session, CellAddress{Sheet: "Sheet1"}, "forced edit"); err != nil {
+		t.Fatalf("SetCell: %v", err)
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "copy.xlsx")
+	backupPath, err := ForceSaveFile(session, targetPath)
+	if err != nil {
+		t.Fatalf("ForceSaveFile: %v", err)
+	}
+	if backupPath != sourcePath+".bak" {
+		t.Fatalf("backup path = %q, want source backup %q", backupPath, sourcePath+".bak")
+	}
+	backup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if !bytes.Equal(backup, original) {
+		t.Fatal("backup does not preserve the source workbook")
+	}
+	reopened, err := OpenFile(targetPath)
+	if err != nil {
+		t.Fatalf("reopen target: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	got, err := reopened.file.GetCellValue("Sheet1", "A1")
+	if err != nil {
+		t.Fatalf("GetCellValue: %v", err)
+	}
+	if got != "forced edit" {
+		t.Fatalf("target A1 = %q, want forced edit", got)
+	}
+}

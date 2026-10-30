@@ -109,6 +109,19 @@ func sumifWildcardPattern(operand string) (string, error) {
 	return pattern.String(), nil
 }
 
+func isSUMIFFormula(formula string) bool {
+	name := strings.TrimSpace(formula)
+	open := strings.IndexByte(name, '(')
+	if open < 0 || !strings.EqualFold(strings.TrimSpace(name[:open]), "SUMIF") {
+		return false
+	}
+	close, err := sumifCallClose(name, open)
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(name[close+1:]) == ""
+}
+
 // evaluateSUMIF handles only a top-level SUMIF call; all other formulas remain
 // on the existing Excelize calculation path.
 func evaluateSUMIF(session *Session, formulaSheet, formula string) (string, bool, error) {

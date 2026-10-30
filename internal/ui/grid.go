@@ -100,9 +100,14 @@ func (grid *GridViewport) HandleMouse(message tea.MouseMsg, sheet *workbook.Shee
 			grid.ColumnWidths[grid.resizingColumn] = clamp(grid.resizeStartW+event.X-grid.resizeStartX, minimumColumnWidth, maximumColumnWidth)
 		}
 		if event.Action == tea.MouseActionRelease {
-			col, width := grid.resizingColumn, grid.ColumnWidths[grid.resizingColumn]
+			col := grid.resizingColumn
+			width := clamp(grid.resizeStartW+event.X-grid.resizeStartX, minimumColumnWidth, maximumColumnWidth)
 			grid.resizingColumn = -1
-			return col, width, width != grid.resizeStartW
+			if width == grid.resizeStartW {
+				return 0, 0, false
+			}
+			grid.ColumnWidths[col] = width
+			return col, width, true
 		}
 		return 0, 0, false
 	}
